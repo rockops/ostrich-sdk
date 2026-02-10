@@ -9,4 +9,5 @@ helm/Chart.lock
 ostr-cli/ostr
 *.exe
 ostd-cli/ostd
-docker/ostrich-sdk/sdk
+docker/ostrich-sdk/sdk/bin
+bin/
