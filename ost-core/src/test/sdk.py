@@ -231,7 +231,18 @@ def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=Non
   use_ostd = os.getenv("USE_OSTD", "false").lower() == "true"
   
   if use_ostd:
-    tabParams=[script_dir+"/../../../ostd-cli/ostd", "--nologo"]
+    import platform
+    system = platform.system().lower()
+    if system == "linux":
+        ostd_path = script_dir+"/../../../bin/linux/ostd"
+    elif system == "darwin":
+        ostd_path = script_dir+"/../../../bin/darwin/ostd"
+    elif system == "windows":
+        ostd_path = script_dir+"/../../../bin/windows/ostd.exe"
+    else:
+        raise Exception(f"Unsupported OS: {system}")
+        
+    tabParams=[ostd_path, "--nologo"]
     custom_tag = os.getenv("OST_IMAGE_TAG")
     if custom_tag:
       tabParams.extend(["--image", "ostrich-sdk", "--tag", custom_tag])

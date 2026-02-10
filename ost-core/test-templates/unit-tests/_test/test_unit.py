@@ -433,11 +433,11 @@ template:
             v2: ${TEST_VALUE_NO_EXIST:-"TEST_VALUE_NO_EXIST_DEFAULT"}
             v3: ${TEST_VALUE_NO_EXIST:-$TEST_VALUE}
             v4: ${TEST_VALUE:-$TEST_VALUE2}
-            v5: ${TEST_VALUE_NO_EXIST:-${TEST_VALUE_NO_EXIST:-"TEST_VALUE_NO_EXIST_DEFAULT"}}
-            v6: ${TEST_VALUE_NO_EXIST:-${TEST_VALUE_NO_EXIST:-${TEST_VALUE}}}
-            v7: ${TEST_VALUE_NO_EXIST:-${TEST_VALUE:-"It should not be this value"}}
-            v8: ${TEST_VALUE:-${TEST_VALUE_NOEXIST:-"It should not be this value"}}
-            v9: ${TEST_VALUE:-${TEST_VALUE_NOEXIST:-'It should not be this value'}}
+            v5: [[ env.TEST_VALUE_NO_EXIST or env.TEST_VALUE_NO_EXIST or "TEST_VALUE_NO_EXIST_DEFAULT" ]]
+            v6: [[ env.TEST_VALUE_NO_EXIST or env.TEST_VALUE_NO_EXIST or env.TEST_VALUE ]]
+            v7: [[ env.TEST_VALUE_NO_EXIST or env.TEST_VALUE or "It should not be this value" ]]
+            v8: [[ env.TEST_VALUE or env.TEST_VALUE_NO_EXIST or "It should not be this value" ]]
+            v9: [[ env.TEST_VALUE or env.TEST_VALUE_NO_EXIST or 'It should not be this value' ]]
             v10: ${TEST_VALUE_NO_EXIST:-'TEST_VALUE_NO_EXIST_DEFAULT'}
             v11: ${TEST_VALUE_NO_EXIST:-'Value with "quotes"'}
             v12: '${TEST_VALUE_NO_EXIST:-Value with \"double quotes\"}'

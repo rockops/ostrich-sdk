@@ -254,7 +254,7 @@ func main() {
 	// Get sdk core directory (ost-core)
 	exePath, _ := os.Executable()
 	topDir := filepath.Dir(exePath)
-	ostCoreDir := filepath.Join(topDir, "..", "ost-core")
+	ostCoreDir := filepath.Join(topDir, "..", "..", "ost-core")
 	unixTop := toUnixPath(ostCoreDir)
 	unixHome := toUnixPath(home)
 
