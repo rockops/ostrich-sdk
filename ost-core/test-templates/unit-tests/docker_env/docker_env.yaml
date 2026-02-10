@@ -1,0 +1,12 @@
+runner:
+   kind: container
+   image: alpine
+commands:
+  - |
+    echo LOGLEVEL=$LOGLEVEL
+    echo DRYRUN=$DRYRUN
+    echo TEMPLATE_DIR=$TEMPLATE_DIR
+    echo OPERATION=$OPERATION
+    echo ARGV=$ARGV
+    echo ARGC=$ARGC
+    echo ARGV_JSON=$ARGV_JSON

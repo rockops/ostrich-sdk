@@ -1,0 +1,35 @@
+ARG TAG=latest
+FROM ostrich-sdk:$TAG
+
+# Setup SSH and required config tools
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server augeas-tools && \
+    mkdir -p /run/sshd && \
+    mkdir -p ~root/.ssh /etc/authorized_keys && chmod 700 ~root/.ssh/ && \
+    augtool 'set /files/etc/ssh/sshd_config/AuthorizedKeysFile ".ssh/authorized_keys /etc/authorized_keys/%u"' && \
+    augtool 'rm /files/etc/ssh/sshd_config/AcceptEnv' && \
+    rm -f /etc/ssh/ssh_host_* && \
+    echo "Port 22" >> /etc/ssh/sshd_config && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy SSH helper scripts and configuration
+# These are used for user management and environment setup within the SSH session
+COPY entry.sh /entry.sh
+COPY sdk.sh /etc/profile.d/sdk.sh
+COPY adduser.sh /sdk/adduser.sh
+COPY deluser.sh /sdk/deluser.sh
+COPY passwd.sh /sdk/passwd.sh
+
+RUN chmod +x /entry.sh /sdk/adduser.sh /sdk/deluser.sh /sdk/passwd.sh
+
+# Configure sudoers for SDK and user management
+RUN echo "sdk     ALL=NOPASSWD: /sdk/adduser.sh, /sdk/deluser.sh, /sdk/passwd.sh" >> /etc/sudoers && \
+    echo "%sdk     ALL=NOPASSWD: ALL" >> /etc/sudoers
+
+EXPOSE 22
+
+WORKDIR /home/sdk
+
+ENTRYPOINT ["/entry.sh"]
+CMD ["/usr/sbin/sshd", "-D", "-e", "-f", "/etc/ssh/sshd_config"]

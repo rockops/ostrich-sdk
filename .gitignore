@@ -1,0 +1,12 @@
+src/extra-templates
+.vscode
+__pycache__/
+.pytest_cache
+Chart.yaml
+*.tgz
+helm/Chart.yaml
+helm/Chart.lock
+ostr-cli/ostr
+*.exe
+ostd-cli/ostd
+docker/ostrich-sdk/sdk

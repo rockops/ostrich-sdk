@@ -1,0 +1,172 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ostrich-sdk
+spec:
+  selector:
+    matchLabels:
+      app: ostrich-sdk
+  serviceName: "ostrich-sdk"
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: ostrich-sdk
+    spec:
+      terminationGracePeriodSeconds: 0
+      serviceAccountName: {{ .Release.Namespace }}-{{ .Release.Name }}-sa
+      containers:
+      - name: sdk
+        image: "{{ (index .Values "ostrich-sdk").registry }}/{{ (index .Values "ostrich-sdk").image }}:{{ (index .Values "ostrich-sdk").imageTag | default .Chart.Version }}"
+        # securityContext: 
+        #     privileged: true 
+        imagePullPolicy: {{ (index .Values "ostrich-sdk").imagePullPolicy }}
+        env:
+        - name: SSH_USERS
+          value: "sdk:900:900:/bin/bash"
+        - name: SSH_ENABLE_PASSWORD_AUTH
+          value: "true"
+        - name: USER_PASSWD
+          value: "ostrich@sdk"
+        # - name: athsdk_config_docker_registry
+        #   value: registry.dmp/ostrich-plugins
+        # - name: SDK_PROXY_URL
+        #   value: http://squid-service:3128
+        - name: DOCKER_UPDATE_SOCK_RIGHTS        
+          value: "1"
+        volumeMounts:
+        - name: data
+          mountPath: /home
+        # - name: templates
+        #   mountPath: /sdk/extra-templates
+        - name: keys
+          mountPath: /etc/authorized_keys
+        - name: keys-ssh
+          mountPath: /etc/ssh/keys
+        - name: var-run 
+          mountPath: /var/run
+        # - name: root-pvc
+        #   mountPath: /data/dmp
+        - name: ident
+          mountPath: /sdk/id
+
+
+      - name: dind-daemon 
+        image: {{ .Values.docker.registry }}/{{ .Values.docker.image }}:{{ .Values.docker.imageTag }}
+        imagePullPolicy: {{ .Values.docker.imagePullPolicy }}
+        resources: 
+            requests: 
+                cpu: 20m 
+                memory: 512Mi 
+        securityContext: 
+            privileged: true 
+        volumeMounts: 
+          - name: docker-data 
+            mountPath: /var/lib/docker
+          - name: var-run 
+            mountPath: /var/run
+          - name: docker-config
+            mountPath: /etc/docker/daemon.json
+            subPath: daemon.json
+
+      {{- /*
+      - name: kubectl-proxy
+        image: {{ .Values.global.imagerepository.private }}{{ .Values.service.kubectl }}
+        command:
+        - kubectl
+        - proxy
+        - --port=8080
+      */}}
+
+
+      volumes: 
+      - name: var-run 
+        emptyDir: {}
+
+      - name: docker-config
+        configMap:
+          name: docker-config
+
+      - name: ident
+        configMap:
+          name: ident
+
+{{ if not .Values.docker.storage.class }}
+      - name: docker-data 
+        emptyDir: {}
+{{ end }}
+
+  volumeClaimTemplates:
+{{ if .Values.docker.storage.class }}
+  - metadata:
+      name: docker-data
+      annotations:
+        {{- toYaml .Values.docker.storage.annotations | nindent 8 }}
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: {{ .Values.docker.storage.class }}
+      resources:
+        requests:
+          storage: {{ .Values.docker.storage.size }}
+{{ end }}
+
+  - metadata:
+      name: data
+      annotations:
+        {{- toYaml (index .Values "ostrich-sdk").storage.annotations | nindent 8 }}
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: {{ (index .Values "ostrich-sdk").storage.class }}
+      resources:
+        requests:
+          storage: {{ (index .Values "ostrich-sdk").storage.size }}
+
+      {{- /*
+
+  # - metadata:
+  #     name: templates
+  #     annotations:
+  #       storage.sdp.zone/path: sdktemplates
+  #   spec:
+  #     accessModes: [ "ReadWriteOnce" ]
+  #     storageClassName: {{ .Values.storageClass }}
+  #     resources:
+  #       requests:
+  #         storage: 1Gi
+  */}}
+
+  - metadata:
+      name: keys
+      annotations:
+        {{- toYaml .Values.keys.storage.annotations | nindent 8 }}
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: {{ .Values.keys.storage.class }}
+      resources:
+        requests:
+          storage: {{ .Values.keys.storage.size }}
+  - metadata:
+      name: keys-ssh
+      annotations:
+        {{- toYaml .Values.keys.storage.annotations | nindent 8 }}
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: {{ .Values.keys.storage.class }}
+      resources:
+        requests:
+          storage: {{ .Values.keys.storage.size }}
+
+  {{- /*
+
+  # - metadata:
+  #     name: root-pvc
+  #     labels:
+  #       app: {{ .Release.Namespace }}-root-pv
+  #   spec:
+  #     storageClassName: ostrich-sdk
+  #     accessModes:
+  #       - ReadWriteOnce
+  #     resources:
+  #       requests:
+  #         storage: 2M
+  */}}

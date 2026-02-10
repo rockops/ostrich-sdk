@@ -1,0 +1,259 @@
+#! /usr/bin/env python 
+
+import os
+import string
+from subprocess import CalledProcessError
+import sys
+import tempfile
+import src.template as template 
+import src.util as util
+import src.conf as conf
+import logging
+import yaml
+from src.ostrichException import OstrichException 
+import src.template as template
+import src.operations as operations
+import src.registry as registry_op
+
+def usage(abort=True):
+    print("""Usage: ost <operation> [parameters]
+operation : the operation to perform (not applicable to all plugin types)
+  - help     : print this help
+  - template : get informations regarding the templates
+  - registry : OCI registry operations
+  - config   : get or set the global configuration
+  - run      : run an operation defined by the plugin
+
+Parameters:
+  -d                    : debug mode
+  -f <plugin_file>      : plugin file to load. Default is ostrich.yaml in current directory
+  -c <kube_config>      : kubeconfig to access your k8s cluster. Default is $HOME/.kube/config
+                          or KUBECONFIG variable
+  -r <private_registry> : private Docker registry to use (if not specified, use the global config, 
+                          or the registry defined in the plugin file)
+  -o <output_directory> : keep descriptor in <output_directory>
+  -dr | --dry-run       : dry run only (just generate the descriptors)
+  --rm                  : delete output directory before proceeding
+  --nodeps              : do not execute dependency tasks
+
+To get started :
+  - ost template list            : get the list of available plugin types:
+  - ost template describe <name> : get a description of the template
+  - ost template config <name>   : generate a sample config file for the template
+Then execute tasks in your plugin (depending on the template, see in the description of your template):
+  - ost run deploy               : deploy your plugin in dev mode
+  - ost run package              : package your plugin (if you)
+
+Registry operations:
+  - ost registry login <url>     : login to an OCI registry
+""")
+
+    if(abort):
+        quit(1)
+
+version = "0.0.0-dev"
+
+params = util.Params()
+
+# Log option
+logformat='%(levelname)s - %(message)s'
+loglevel=logging.INFO
+
+registry: string=None
+
+# Parse standard arguments
+args = sys.argv[1:]
+logo: bool=not "--nologo" in args
+
+inOperationParamsPart=False
+
+while len(args):
+    if (args[0] == '-f' or args[0] == '--file') and not inOperationParamsPart:
+        params.pluginFile = args[1]
+        args = args[2:]
+    elif (args[0] == '-c' or args[0] == '--kubeconfig') and not inOperationParamsPart:    
+        params.kubeConfig = args[1]
+        args = args[2:]
+    elif (args[0] == '-d' or args[0] == '--debug') and not inOperationParamsPart:
+        loglevel=logging.DEBUG
+        args = args[1:]
+    elif (args[0] == '-r' or args[0] == '--registry'):
+        params.registry = args[1]
+        args = args[2:]
+    elif (args[0] == '-o' or args[0] == '--output') and not inOperationParamsPart:
+        params.tmpdir = args[1]
+        params.userOutput = True
+        args = args[2:]
+    elif (args[0] == '-dr' or args[0] == '--dry-run'):
+        params.dryRun=True
+        if(params.tmpdir == None):
+          params.tmpdir = "dry-run"
+        args = args[1:]
+    elif args[0] == '--rm':
+        params.rmTmpDir=True
+        args = args[1:]
+    elif (args[0] == '-nd' or args[0] == '--nodeps'):
+        params.noDeps=True
+        args = args[1:]
+    elif (args[0] == '-s' or args[0] == '--skip'):
+        params.skip.append(args[1])
+        args = args[2:]
+    elif args[0] == '--nologo':
+        logo=False
+        args = args[1:]
+    elif (args[0] == '--keep' or args[0] == '-k'):
+        params.deletePluginTmpDir=False
+        args = args[1:]
+    elif (args[0] == '-h' or args[0] == '--help' or args[0] == 'help') and not inOperationParamsPart:
+        params.usage=True
+        args = args[1:]
+    elif args[0] == '--version':
+        print ("ost "+version)
+        quit(0)
+    elif args[0] == 'run' :
+        inOperationParamsPart=True
+        args = args[1:]
+    else:
+        if args[0].startswith("-") and not inOperationParamsPart:
+            usage(False)
+            print("ERROR - Bad flag "+args[0])
+            print("        If you need to pass parameters to the task, use the run command") 
+            print("        Example: ost run deploy --reload => calls the deploy task with --reload as parameters") 
+            print("")
+            quit(1)
+
+        if args[0] in ["template","config","registry","help"]:
+            inOperationParamsPart=True
+            params.operationParams.append(args[0])
+            args = args[1:]
+        elif not inOperationParamsPart:
+            usage(False)
+            print("Did you forget the 'run' command before the operation parameters?")
+            quit(1)
+        else:
+            params.operationParams.append(args[0])
+            args = args[1:]
+
+
+# Fix for [WinError 6] on Windows when running under pytest
+# We use a custom StreamHandler that suppresses OSError
+logger = logging.getLogger()
+logger.setLevel(loglevel)
+if os.name == 'nt':
+    handler = util.SafeStreamHandler(sys.stdout)
+else:
+    handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter(logformat))
+logger.addHandler(handler)
+# logging.basicConfig(format=logformat,level=loglevel, stream=sys.stdout)
+
+if(params.usage):
+    usage(False)
+    quit(0)
+
+if len(params.operationParams)==0:
+    usage()
+
+params.operation=params.operationParams[0]
+params.operationParams=params.operationParams[1:]
+
+if params.operation in ["template", "config", "registry", "help"]:
+    params.collectStandardArgs()
+
+if(params.operation=="template" and len(params.operationParams)>0 and params.operationParams[0]=="config"):
+    logo=False
+
+if logo and not params.nologo:
+    print(r'''                              _              
+     ____   ___  _____  ___  |_| ___  __   _  
+    / __ \ / __||_   _||   ) | |/ __||  |_| | 
+    |(oO)| \__ \  | |  |   \ | |\__ \)   _  | 
+    \_\/_/ |___/  |_|  |_|\_\|_||___/|__| |_|_  _
+      ||                            ___   __| || | __
+      ||                           / __| / _` || |/ /
+                                   \__ \| (_| ||   < 
+                                   |___/ \__,_||_|\_\
+''', flush=True)
+
+
+logging.debug("Start Ostrich SDK. Operation=%s",params.operation)
+
+if params.operation=="help":
+   usage(False)
+   quit(0)
+
+try:
+    conf.loadConf()
+    util.setLocation(os.path.dirname(os.path.abspath(params.pluginFile)))
+
+    if params.registry == None:
+        params.registry = conf.getConf("config.docker.registry",params)
+    
+    params.loglevel=loglevel
+
+    if(params.registry != None):
+        logging.debug("Using private Docker registry %s",params.registry)
+    else:
+        logging.warning("No Docker registry set. If required, docker push operations will fail")
+
+    if params.operation=="template":
+        template.template(params)
+    elif params.operation=="registry":
+        registry_op.registry(params)
+    elif params.operation=="help":
+        usage(False)
+    elif params.operation=="config":
+        operations.config(params)
+    else:
+        params.loadPluginConf()
+        logging.debug("Values: %s", yaml.dump(params.parsedPluginConfig))
+
+        temp_base = None
+        if "OST_WORKSPACE" in os.environ:
+             temp_base = os.getcwd()
+
+        with tempfile.TemporaryDirectory(dir=temp_base) as tmpdirname:
+            if params.tmpdir==None:
+                logging.debug("Using tmp output dir %s",tmpdirname)
+                params.tmpdir=tmpdirname
+            else:
+                template.ensureTmpDir(params)
+        
+            if(params.deletePluginTmpDir):
+                with tempfile.TemporaryDirectory() as pluginTmpDir:
+                    params.pluginTmpDir=pluginTmpDir
+                    operations.execute(params)
+            else:
+                params.pluginTmpDir=tempfile.TemporaryDirectory().name
+                os.makedirs(params.pluginTmpDir)
+                operations.execute(params)
+
+
+except OstrichException as err:
+    logging.fatal("%s",str(err))
+    if(loglevel<=logging.DEBUG):
+        logging.exception(err)
+    quit(1)
+except CalledProcessError as err:
+    logging.fatal("%s",str(err))
+    if(loglevel<=logging.DEBUG):
+        logging.exception(err)
+    quit(1)
+except KeyboardInterrupt:
+    logging.warning("Interrupted by user")
+    quit(1)
+except SystemExit as err:
+    logging.debug("%s: %s",type(err).__name__,str(err))
+    raise
+except BaseException as err:
+    logging.fatal("%s: %s",type(err).__name__,str(err))
+    raise
+
+if(params.dryRun):
+    print(f"""
+*
+* Dry run mode
+* No deployment have been made
+* Descriptors have been generated in folder \"{params.tmpdir}\"
+*
+""", flush=True)

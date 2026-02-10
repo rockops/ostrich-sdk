@@ -1,0 +1,8 @@
+plugin:
+  name: unit
+  version: 0.0.1
+  business_name: Unit Test
+template:
+  kind: unit-tests
+  params:
+    message: "Hello World"

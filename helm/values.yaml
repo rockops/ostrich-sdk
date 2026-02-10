@@ -1,0 +1,35 @@
+keys:
+  storage:
+    class: "local-path"
+    # Add annotations here if any
+    annotations: {}
+    size: 10M
+
+ostrich-sdk:
+  id: ostrich-sdk
+  registry: ghcr.io/rockops/docker
+  image: ostrich-sdk-ssh
+  # Defaults to the helm version
+  #imageTag: latest
+  imagePullPolicy: Always
+  nodePort: 31022
+  storage:
+    class: "local-path"
+    # Add annotations here if any
+    annotations: {}
+    size: 60Gi
+
+docker:
+  registry: docker.io
+  image: docker
+  imageTag: 29.1.5-dind
+  imagePullPolicy: IfNotPresent
+  storage:
+    class: "local-path"
+    # Add annotations here if any
+    annotations: {}
+    size: 40Gi
+  # Put here the daemon.json config
+  config: |
+    {
+    }
