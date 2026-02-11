@@ -122,14 +122,19 @@ func (c *SSHClient) getRemoteValue(cmd string) string {
 func (c *SSHClient) DoSync() error {
 	slog.Info("Syncing sources")
 
+	configData, err := loadYaml("ostrich.yaml")
+	if err != nil {
+		return fmt.Errorf("error loading ostrich.yaml: %v", err)
+	}
+
 	// Get plugin name from ostrich.yaml
-	pluginName := c.getRemoteValue("cat ostrich.yaml | yq -r '.plugin.name'")
+	pluginName := getYamlPathValue(configData, "plugin.name")
 	if pluginName == "" {
 		pluginName = "unknown"
 	}
 
-	remoteDir := filepath.Join(c.config.UUID, pluginName)
-	srcDir := c.getRemoteValue("cat ostrich.yaml | yq -r '.template.params.src_dir'")
+	remoteDir := pathJoin(c.config.UUID, pluginName)
+	srcDir := getYamlPathValue(configData, "template.params.src_dir")
 	if srcDir == "" || srcDir == "null" {
 		srcDir = "."
 	}
