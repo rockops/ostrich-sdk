@@ -65,7 +65,8 @@ func (c *SSHClient) Run(cmd string) error {
 }
 
 func (c *SSHClient) RunInteractive(cmd string) error {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	inFd := int(os.Stdin.Fd())
+	if !term.IsTerminal(inFd) {
 		return c.Run(cmd)
 	}
 
@@ -75,16 +76,22 @@ func (c *SSHClient) RunInteractive(cmd string) error {
 	}
 	defer session.Close()
 
-	fd := int(os.Stdin.Fd())
-	state, err := term.MakeRaw(fd)
+	state, err := term.MakeRaw(inFd)
 	if err != nil {
 		return err
 	}
-	defer term.Restore(fd, state)
+	defer term.Restore(inFd, state)
 
-	w, h, err := term.GetSize(fd)
+	// On Windows, GetSize must be called on an output descriptor
+	outFd := int(os.Stdout.Fd())
+	if !term.IsTerminal(outFd) {
+		outFd = int(os.Stderr.Fd())
+	}
+
+	w, h, err := term.GetSize(outFd)
 	if err != nil {
-		return err
+		// Fallback to defaults if we can't get size
+		w, h = 80, 24
 	}
 
 	modes := ssh.TerminalModes{
@@ -105,22 +112,33 @@ func (c *SSHClient) RunInteractive(cmd string) error {
 }
 
 func (c *SSHClient) Shell() error {
+	inFd := int(os.Stdin.Fd())
+	if !term.IsTerminal(inFd) {
+		return fmt.Errorf("stdin is not a terminal")
+	}
+
 	session, err := c.client.NewSession()
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
-	fd := int(os.Stdin.Fd())
-	state, err := term.MakeRaw(fd)
+	state, err := term.MakeRaw(inFd)
 	if err != nil {
 		return err
 	}
-	defer term.Restore(fd, state)
+	defer term.Restore(inFd, state)
 
-	w, h, err := term.GetSize(fd)
+	// On Windows, GetSize must be called on an output descriptor
+	outFd := int(os.Stdout.Fd())
+	if !term.IsTerminal(outFd) {
+		outFd = int(os.Stderr.Fd())
+	}
+
+	w, h, err := term.GetSize(outFd)
 	if err != nil {
-		return err
+		// Fallback to defaults
+		w, h = 80, 24
 	}
 
 	modes := ssh.TerminalModes{
