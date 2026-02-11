@@ -23,7 +23,7 @@ if [ -n "$PRIVATE_DOCKER_REGISTRY" ]; then
     echo "Using private docker registry $PRIVATE_DOCKER_REGISTRY"
     OPTS="--set ostrich-sdk.registry=$PRIVATE_DOCKER_REGISTRY"
 fi
-helm upgrade --install ostrich . $OPTS
+helm upgrade --install --namespace ostrich --create-namespace ostrich . $OPTS
 
 echo ">> Done."
 

@@ -16,6 +16,21 @@ from src.ostrichException import OstrichException
 # that might be trusted at the system level but not by the requests' default CA bundle.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+DEFAULT_REGISTRY = {'name': 'ostrich', 'url': 'ghcr.io/rockops/osplate'}
+
+def load_registries():
+    config_file = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
+    config = util.safeLoad(config_file)
+    registries = config.get('registries', [])
+    
+    # Check if ostrich is already there (manually added or overridden)
+    for reg in registries:
+        if reg.get('name') == 'ostrich':
+            return registries
+            
+    # If not, add the default one at the beginning
+    return [DEFAULT_REGISTRY] + registries
+
 def registryUsage():
     print("""Usage: ost registry <command> [parameters]
 Available commands:
@@ -93,8 +108,8 @@ def registry(params: Params):
             raise OstrichException("Invalid number of parameters")
         name = params.operationParams[1]
         
-        config = util.safeLoad(config_file)
-        registries = config.get('registries', [])
+        registries = load_registries()
+
         
         url = None
         for reg in registries:
@@ -125,8 +140,8 @@ def registry(params: Params):
             raise OstrichException("Invalid number of parameters")
         name = params.operationParams[1]
         
-        config = util.safeLoad(config_file)
-        registries = config.get('registries', [])
+        registries = load_registries()
+
         
         url = None
         for reg in registries:
@@ -189,9 +204,8 @@ def registry(params: Params):
             
         logging.info(f"Registry {name} ({url}) added to configuration")
     elif sub_op in ["list", "ls"]:
-        config = util.safeLoad(config_file)
+        registries = load_registries()
         
-        registries = config.get('registries', [])
         if not registries:
             logging.info("No registries configured")
             return
@@ -205,6 +219,9 @@ def registry(params: Params):
             raise OstrichException("Invalid number of parameters")
         name = params.operationParams[1]
         
+        if name == 'ostrich':
+            raise OstrichException("The 'ostrich' registry is the official Ostrich registry and cannot be removed.")
+
         config = util.safeLoad(config_file)
         registries = config.get('registries', [])
         
@@ -240,8 +257,7 @@ def search(params: Params):
         show_all_versions = True
         args.remove("--versions")
 
-    config = util.safeLoad(config_file)
-    registries = config.get('registries', [])
+    registries = load_registries()
     registry_names = [r.get('name') for r in registries]
 
     registry_filter = None

@@ -454,9 +454,7 @@ def template(params: util.Params):
             else:
                 template_name = template_ref
             
-            config_file = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
-            config = util.safeLoad(config_file)
-            registries = config.get('registries', [])
+            registries = registry_op.load_registries()
             repo_url = None
             for reg in registries:
                 if reg.get('name') == repo_name:
@@ -605,9 +603,7 @@ def template(params: util.Params):
         folder = args[1]
         registry_name = args[2]
         
-        config_file = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
-        config = util.safeLoad(config_file)
-        registries = config.get('registries', [])
+        registries = registry_op.load_registries()
         repo_url = None
         for reg in registries:
             if reg.get('name') == registry_name:

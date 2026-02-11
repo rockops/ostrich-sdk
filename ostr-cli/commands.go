@@ -13,7 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"net"
+	"syscall"
+
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
 )
 
 func cmdInit() {
@@ -75,20 +79,59 @@ func cmdInit() {
 
 	// Install key
 	slog.Info("Installing key on remote host...")
-	// Key is installed on remote host (placeholder for manual instructions)
 
-	// We still need to do the initial SSH with password to install the key.
-	// Go's ssh doesn't support interactive password prompts easily for the first time.
-	// But we'll try to execute a simple command.
-	fmt.Println("Note: For the FIRST connection, you might prefer to manually install the key")
-	fmt.Printf("ssh-copy-id -p %s sdk@%s\n", port, endpoint)
-	fmt.Println("Or enter password if prompted by the following command:")
+	// Read public key
+	pubKeyBytes, err := ioutil.ReadFile(keyPath + ".pub")
+	if err != nil {
+		slog.Error(fmt.Sprintf("Error reading public key: %v", err))
+		return
+	}
+	pubKey := strings.TrimSpace(string(pubKeyBytes))
 
-	// Since we can't easily do interactive password with x/crypto/ssh without a lot of TTY work,
-	// and the user said "no ssh [binary]", this is a bit of a chicken-and-egg for init.
-	// I'll implement a simple SSH call if I can, or tell them.
+	// Prompt for password
+	fmt.Printf("Enter password for sdk@%s: ", endpoint)
+	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		slog.Error(fmt.Sprintf("Error reading password: %v", err))
+		return
+	}
+	password := string(bytePassword)
+	fmt.Println() // Newline after password input
 
-	slog.Info("Key installed locally. You can use 'ostr ssh' once the remote host has your pubkey.")
+	// Connect via SSH with password
+	sshConfig := &ssh.ClientConfig{
+		User: "sdk",
+		Auth: []ssh.AuthMethod{
+			ssh.Password(password),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+
+	addr := net.JoinHostPort(endpoint, port)
+	client, err := ssh.Dial("tcp", addr, sshConfig)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to connect: %v", err))
+		return
+	}
+	defer client.Close()
+
+	// Create session
+	session, err := client.NewSession()
+	if err != nil {
+		slog.Error(fmt.Sprintf("Failed to create session: %v", err))
+		return
+	}
+	defer session.Close()
+
+	// Install key command
+	cmd := fmt.Sprintf("mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '%s' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys", pubKey)
+	if err := session.Run(cmd); err != nil {
+		slog.Error(fmt.Sprintf("Failed to install key: %v", err))
+		return
+	}
+
+	slog.Info("Key installed successfully on remote host.")
+	slog.Info("You can now use 'ostr ssh' to connect.")
 }
 
 func generateUUID() string {
