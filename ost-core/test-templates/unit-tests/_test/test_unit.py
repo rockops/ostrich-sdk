@@ -37,6 +37,9 @@ template:
       valSub: "sub"
     dotnet:
       sln: unittest.sln
+    input:
+      src: "src"
+      bin: "bin"
 """
 
 
@@ -188,6 +191,10 @@ template:
         sdk.checkFileContent(filtersPath, "^bool2:False,false$")
         sdk.checkFileContent(filtersPath, "^bool3:123,123$")
         sdk.checkFileContent(filtersPath, "^bool4:string,string$")
+
+        sdk.checkFileContent(filtersPath, "^input1:"+util.toUnixPath(tmp_path / "src/java")+"$")
+        sdk.checkFileContent(filtersPath, "^input2:"+util.toUnixPath(tmp_path / "src")+"$")
+        sdk.checkFileContent(filtersPath, "^input3:"+util.toUnixPath(tmp_path / "bin")+"$")
 
 
     """ 
@@ -447,6 +454,9 @@ template:
             v16: ${QUOTE_VALUE}
         sub:
         valSub: "sub"
+        input:
+            src: "src"
+            bin: "bin"
 """
         sdk.createEnv(tmp_path,ostrichPluginYamlExpand)
 

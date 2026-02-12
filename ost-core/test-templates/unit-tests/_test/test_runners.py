@@ -41,6 +41,9 @@ template:
       valSub: "sub"
     dotnet:
       sln: unittest.sln
+    input:
+      src: "src"
+      bin: "bin"
 """
 
 

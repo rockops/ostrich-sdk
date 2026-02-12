@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 import jsonschema
 from envsubst import envsubst
+from glom import glom
 
 class SafeStreamHandler(logging.StreamHandler):
     """
@@ -339,6 +340,25 @@ def toUnixPath(p):
     return p.replace('\\', '/')
 
 
+def input_filter(value, input_name):
+    global configAll
+    # Use glom's default to avoid exception inside glom and handle it ourselves
+    key = f"template.params.input.{input_name}"
+    input_path = glom(configAll, key, default=None)
+    
+    if input_path is None:
+        # We raise the exception, but we don't log it manually.
+        # templateString will log it once at the end.
+        raise OstrichException(f"Cannot locate key {key} in config file")
+    
+    # This path is relative from the ostrich.yaml location (result of 'here' filter)
+    base = here(input_path)
+    
+    # Combine with the input value
+    if value:
+        return os.path.normpath(os.path.join(base, value)).replace("\\", "/")
+    return base
+
 ## Jinja2 globals
 
 def raise_helper(msg):
@@ -358,10 +378,13 @@ def getCurrentLineNo():
 # if the template is the root one, it returns the line number
 # else it returns the template name and the line number (happens when we are in an included template)
 def getCurrentLocation():
+    template = None
     for frameInfo in stack():
         if frameInfo.frame.f_globals.get("__jinja_template__") is not None:
             template = frameInfo.frame.f_globals.get("__jinja_template__")
             break
+    if template is None:
+        return ""
     global jinja
     if(template == jinja):
         return " at line "+str(getCurrentLineNo())
@@ -489,6 +512,7 @@ def templateString(srcTemplate: string, filterRender: bool):
     e.filters['minVersion'] = minVersion
     e.filters['maxVersion'] = maxVersion
     e.filters['toUnixPath'] = toUnixPath
+    e.filters['input'] = input_filter
 
     e.globals['raise']=raise_helper
     e.globals['get']=get_helper
