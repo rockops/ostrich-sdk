@@ -6,3 +6,15 @@ template:
   kind: unit-tests
   params:
     message: "Hello World"
+    folder: "folder"
+    valTrue: true
+    valFalse: false
+    valInt: 123
+    valString: string
+    sub:
+      valSub: "sub"
+    dotnet:
+      sln: unittest.sln
+    input:
+      src: "src"
+      bin: "bin"

@@ -45,8 +45,6 @@ func cmdRun(args []string) {
 		os.Exit(1)
 	}
 
-	configDir := filepath.Dir(absConfigPath)
-
 	// Load YAML config
 	configData, err := loadYaml(absConfigPath)
 	if err != nil {
@@ -54,47 +52,19 @@ func cmdRun(args []string) {
 		os.Exit(1)
 	}
 
-	// Get plugin name and input folder
-	pluginName := getYamlPathValue(configData, "plugin.name")
-	if pluginName == "" || pluginName == "null" {
-		pluginName = "unknown"
-	}
-
-	inputFolder := getYamlPathValue(configData, "template.input")
-
 	runOnRemote(func(c *SSHClient) error {
-		// Use UUID and pluginName for the remote directory to avoid collisions
-		// Use pathJoin to ensure forward slashes on the remote Linux environment
+		// Sync configuration and input folders
+		if _, err := c.DoSyncFile(configFile); err != nil {
+			return err
+		}
+
+		// Get plugin name to determine remote directory
+		pluginName := getYamlPathValue(configData, "plugin.name")
+		if pluginName == "" || pluginName == "null" {
+			pluginName = "unknown"
+		}
 		remoteDir := pathJoin(c.config.UUID, pluginName)
-
-		slog.Debug(fmt.Sprintf("Preparing remote directory: %s", remoteDir))
-		if err := c.Run(fmt.Sprintf("mkdir -p %s", remoteDir)); err != nil {
-			return err
-		}
-
-		// Sync config file to the remote directory
-		// We use the same name as the local config file for consistency
 		configBase := filepath.Base(configFile)
-		remoteConfigPath := pathJoin(remoteDir, configBase)
-		slog.Debug(fmt.Sprintf("Syncing config file: %s -> %s", configFile, remoteConfigPath))
-		if err := c.PutFile(absConfigPath, remoteConfigPath); err != nil {
-			return err
-		}
-
-		// Sync input folder if it exists
-		if inputFolder != "" && inputFolder != "null" {
-			absInputPath := filepath.Join(configDir, inputFolder)
-			// Check if local input folder exists
-			if info, err := os.Stat(absInputPath); err == nil && info.IsDir() {
-				remoteInputPath := pathJoin(remoteDir, inputFolder)
-				slog.Debug(fmt.Sprintf("Syncing input folder: %s -> %s", inputFolder, remoteInputPath))
-				if err := c.Sync(absInputPath, remoteInputPath); err != nil {
-					return err
-				}
-			} else if err != nil {
-				slog.Warn(fmt.Sprintf("Input folder %s not found or not a directory: %v", inputFolder, err))
-			}
-		}
 
 		// Execute ost run remotely using the full path /sdk/ost
 		// We pass the same -f flag if it was provided, or default to ostrich.yaml

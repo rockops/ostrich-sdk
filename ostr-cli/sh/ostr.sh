@@ -80,8 +80,6 @@ sync() {
 
     test -n "$DEBUG" && echo REMOTEDIR=$REMOTEDIR
 
-    DIR=$(cat $CONFIGFILE | ssh -i $HOME/.ostrich/id_rsa sdk@$DEFENDPOINT -oPort=$DEFPORT  -o LogLevel=ERROR $YQ_REMOTE -r '.template.params.src_dir')
-
     dossh "mkdir -p $REMOTEDIR"
 
     test -r $CONFIGFILE || {
@@ -89,26 +87,30 @@ sync() {
       exit 1
     }
   
-    BASE=$(dirname $(readlink -f $CONFIGFILE))
-
-    rsync --version > /dev/null 2>&1 && {
-      dossh mkdir -p /home/sdk/$REMOTEDIR/$DIR
-      dorsync $BASE/$DIR sdk@$DEFENDPOINT:$(dirname /home/sdk/$REMOTEDIR/$DIR)
-    } || {
-      dossh "mkdir -p $REMOTEDIR/$DIR"
-      CLEAN_REMOTE=$(dossh "cd /home/sdk/$REMOTEDIR/$DIR && pwd")
-      dossh rm -rf "$CLEAN_REMOTE"
-      dossh mkdir -p "$CLEAN_REMOTE"
-      echo
-      echo "WARN - rsync not found, fallback to full copy."
-      echo "       consider installling rsync for better performance"
-      echo
-      doscp -r $(cd $BASE/$DIR && pwd) sdk@$DEFENDPOINT:$(dirname "$CLEAN_REMOTE")
-    }
-
     cat $CONFIGFILE | envsubst > /tmp/${CONFIGFILE}.subst
     doscp /tmp/${CONFIGFILE}.subst sdk@$DEFENDPOINT:/home/sdk/$REMOTEDIR/$(basename $CONFIGFILE) > /dev/null
     rm -f /tmp/${CONFIGFILE}.subst
+
+    DIR=$(dossh "cd $REMOTEDIR && source /etc/profile.d/sdk.sh && ost -f $(basename $CONFIGFILE) template values | $YQ_REMOTE -r '.template.params.src_dir'")
+    
+    if [ "$DIR" != "null" ] && [ -n "$DIR" ]; then
+        BASE=$(dirname $(readlink -f $CONFIGFILE))
+
+        rsync --version > /dev/null 2>&1 && {
+          dossh mkdir -p /home/sdk/$REMOTEDIR/$DIR
+          dorsync $BASE/$DIR sdk@$DEFENDPOINT:$(dirname /home/sdk/$REMOTEDIR/$DIR)
+        } || {
+          dossh "mkdir -p $REMOTEDIR/$DIR"
+          CLEAN_REMOTE=$(dossh "cd /home/sdk/$REMOTEDIR/$DIR && pwd")
+          dossh rm -rf "$CLEAN_REMOTE"
+          dossh mkdir -p "$CLEAN_REMOTE"
+          echo
+          echo "WARN - rsync not found, fallback to full copy."
+          echo "       consider installling rsync for better performance"
+          echo
+          doscp -r $(cd $BASE/$DIR && pwd) sdk@$DEFENDPOINT:$(dirname "$CLEAN_REMOTE")
+        }
+    fi
 
 }
 
@@ -476,6 +478,9 @@ case "$OPERATION" in
       doscp -r $2 'sdk@'$DEFENDPOINT':/home/sdk/'$uid
       dossh "cd $uid; source /etc/profile.d/sdk.sh; ls; ost template install $(basename $2)"
 
+    elif [ "$1" = "values" ]; then
+      sync
+      dossh "cd $REMOTEDIR; source /etc/profile.d/sdk.sh; ost $OPTS"
     else
       dossh "source /etc/profile.d/sdk.sh; ost $OPTS $OPTIONRM"
     fi

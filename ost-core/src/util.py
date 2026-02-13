@@ -16,6 +16,7 @@ from pathlib import Path
 import jsonschema
 from envsubst import envsubst
 from glom import glom
+import copy
 
 class SafeStreamHandler(logging.StreamHandler):
     """
@@ -262,7 +263,7 @@ def md5hash(str):
 def fromTemplate(str):
     if(not str):
       raise OstrichException(f"'fromTemplate' fiter called with an undefined or empty input "+getCurrentLocation())  
-    return (configAll['templateLocation']+"/"+str).replace("\\", "/")
+    return (configAll['_ostrich']['templateLocation']+"/"+str).replace("\\", "/")
 
 def fromTemplates(str):
     if(not str):
@@ -271,12 +272,12 @@ def fromTemplates(str):
 
 def fromTemplateInstance(str):
     global configAll
-    return os.path.abspath(configAll['tmpdir']+"/"+str).replace("\\", "/")
+    return os.path.abspath(configAll['_ostrich']['tmpdir']+"/"+str).replace("\\", "/")
 
 def fromJob(str):
     if(not str):
       raise OstrichException(f"'fromJob' fiter called with an undefined or empty input "+getCurrentLocation())  
-    return (configAll['templateLocation']+"/"+configAll['operation']+"/"+str).replace("\\", "/")
+    return (configAll['_ostrich']['templateLocation']+"/"+configAll['_ostrich']['operation']+"/"+str).replace("\\", "/")
 
 def nosnapshot(str):
     if(not str):
@@ -424,7 +425,7 @@ def safe_helper(key):
 
 def isDebugEnabled():
     global configAll
-    return configAll['loglevel'] < logging.INFO
+    return configAll['_ostrich']['loglevel'] < logging.INFO
 
 ## ----------------------------
 
@@ -534,9 +535,9 @@ def templateString(srcTemplate: string, filterRender: bool):
             logging.exception(e)
             raise OstrichException(f"Error executing global pretemplate.py: {e}")
 
-    if os.path.exists(f"{configAll['templateLocation']}/pretemplate.py"):
-        logging.debug(f"Execute {configAll['templateLocation']}/pretemplate.py")
-        with open(f"{configAll['templateLocation']}/pretemplate.py","r") as f:
+    if os.path.exists(f"{configAll['_ostrich']['templateLocation']}/pretemplate.py"):
+        logging.debug(f"Execute {configAll['_ostrich']['templateLocation']}/pretemplate.py")
+        with open(f"{configAll['_ostrich']['templateLocation']}/pretemplate.py","r") as f:
             code=f.read()
             locals={}
             locals['env']=e
@@ -559,7 +560,7 @@ def templateString(srcTemplate: string, filterRender: bool):
             msg+=" ("+str(e.name)+")"  
         if(hasattr(e, 'names') and e.names!=None):
             msg+=" ("+str(e.names)+")"
-        raise OstrichException(f"Error rendering file {configAll['currentfile']}: [{type(e).__name__}] {msg}")
+        raise OstrichException(f"Error rendering file {configAll['_ostrich']['currentfile']}: [{type(e).__name__}] {msg}")
 
 
 def dict_merge(dct, merge_dct):
@@ -578,17 +579,16 @@ def dict_merge(dct, merge_dct):
             dct[k] = merge_dct[k]
 
 
-def template(inputDir: string, config: Any, params: Params,operation):
-
-    logging.debug(f"Templating {inputDir}")
-    
+def getMergedConfig(inputDir: string, config: Any, params: Params):
     global configAll
     configAll = config
     templateConfig = {}
     globalTemplateConfig = {}
 
-    configAll['loglevel']=params.loglevel
-    configAll['tmpdir']=params.tmpdir
+    configAll['_ostrich'] = {}
+    configAll['_ostrich']['loglevel']=params.loglevel
+    configAll['_ostrich']['operation']=""
+    configAll['_ostrich']['tmpdir']=params.tmpdir
 
     if os.path.exists(inputDir+"/../global/config.yaml"):
         logging.debug("Loading global config file %s/config.yaml",inputDir+"/../global")
@@ -603,12 +603,33 @@ def template(inputDir: string, config: Any, params: Params,operation):
         logging.debug("No config.yaml file found in %s",inputDir)
 
     dict_merge(globalTemplateConfig,templateConfig)
-    configAll['template']['__sdkconfig']=globalTemplateConfig
 
-    configAll['templateLocation']=getTemplatePath(params.getPluginConf("template.kind"))
-    configAll['templateRoot']=templateRoot()
+    defaults = {}
+    if os.path.exists(inputDir+"/default.yaml"):
+        logging.debug("Loading default file %s/default.yaml",inputDir)
+        with open(inputDir+"/default.yaml") as f:
+            defaults = yaml.safe_load(f)
+    else:
+        logging.debug("No default.yaml file found in %s",inputDir)
+    
+    # Merge configAll (user config) into defaults, so user overrides defaults
+    dict_merge(defaults, configAll)
+    configAll = defaults    
+    params.parsedPluginConfig = configAll
 
-    configAll['__localConfig']=safeLoad(getConfigFile())
+    configAll['_ostrich']['sdkconfig']=globalTemplateConfig
+    configAll['_ostrich']['templateLocation']=getTemplatePath(params.getPluginConf("template.kind"))
+    configAll['_ostrich']['templateRoot']=templateRoot()
+    configAll['_ostrich']['localconfig']=safeLoad(getConfigFile())
+    
+    return configAll
+
+def template(inputDir: string, config: Any, params: Params,operation):
+
+    logging.debug(f"Templating {inputDir}")
+    
+    configAll = getMergedConfig(inputDir, config, params)
+    configAll['_ostrich']['operation']=operation
 
     templatePathPrefix = getTemplatePath(params.getPluginConf("template.kind"))
     for subdir, dirs, files in os.walk(inputDir):
@@ -626,13 +647,13 @@ def template(inputDir: string, config: Any, params: Params,operation):
         # The subdir is the absolute path to the template
         # we need the job, so we calculate the relative path from the template root
         # The first segment of this path is the operation
-        configAll['operation']=dstdir.split("/")[0]
+        configAll['_ostrich']['operation']=dstdir.split("/")[0]
 
-        logging.debug("Operation %s",configAll['operation'])
+        logging.debug("Operation %s",configAll['_ostrich']['operation'])
 
         for file in files:
             logging.debug("Process file %s",file)
-            configAll['currentfile']=file
+            configAll['_ostrich']['currentfile']=file
 
             srcTemplateFile=subdir+"/"+file
             srcTemplate : string

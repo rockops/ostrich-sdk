@@ -33,6 +33,7 @@ def templateUsage():
   - delete|rm <template_name>   : delete a custom template
   - test <template_name>        : run the tests for the template <template_name>
                                   Details with 'ost template test info'
+  - values                      : display the actual values used for rendering
   - package <template_dir>      : package the template located in <template_dir>
   - publish <folder> <registry> : package and publish a template to an OCI registry
   - search [registry] <query> [--versions] : search for templates in registries""")
@@ -654,6 +655,24 @@ def template(params: util.Params):
 
     elif sub == "search":
         registry_op.search(params)
+
+    elif sub == "values":
+        try:
+            params.loadPluginConf()
+        except BaseException as e:
+            raise OstrichException(f"Error loading plugin configuration: {str(e)}")
+
+        template_kind = params.getPluginConf("template.kind")
+        templatePath = util.getTemplatePath(template_kind)
+
+        configAll = util.getMergedConfig(templatePath, params.parsedPluginConfig, params)
+        
+        # Filter out only top-level internal SDK keys
+        displayConfig = configAll.copy()
+        displayConfig.pop('_ostrich', None)
+        displayConfig.pop('params', None)
+        
+        print(yaml.dump(displayConfig, sort_keys=False))
 
     else:
         logging.error("Try \"ost template help\" to know how to use the template command")

@@ -40,6 +40,8 @@ template:
     input:
       src: "src"
       bin: "bin"
+default:
+  valueExist: nodefault
 """
 
 
@@ -212,6 +214,22 @@ template:
         # _ => get safe. If the key does not exist, return an empty string
         sdk.checkFileContent(globalsPath, "^_:sub$")
         sdk.checkFileContent(globalsPath, "^_2:$")
+
+
+    """ 
+    Check the default values
+    """
+    def test_defaults(self,tmp_path):
+        sdk.createEnv(tmp_path,self.ostrichPluginYaml)
+        sdk.ost(["template","--rm"])
+
+        defaultPath="unit/unit/default.txt"
+
+        sdk.cat(defaultPath)
+
+        sdk.checkFileContent(defaultPath, "^01:nodefault$")
+        sdk.checkFileContent(defaultPath, "^02:default$")
+
 
 
     """ get a value on non existing key """

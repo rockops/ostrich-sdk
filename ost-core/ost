@@ -160,7 +160,7 @@ params.operationParams=params.operationParams[1:]
 if params.operation in ["template", "config", "registry", "help"]:
     params.collectStandardArgs()
 
-if(params.operation=="template" and len(params.operationParams)>0 and params.operationParams[0]=="config"):
+if(params.operation=="template" and len(params.operationParams)>0 and params.operationParams[0] in ["config", "values"]):
     logo=False
 
 if logo and not params.nologo:

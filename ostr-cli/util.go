@@ -64,6 +64,16 @@ func loadYaml(path string) (map[string]interface{}, error) {
 	return data, nil
 }
 
+// parseYaml parses a YAML string into a map
+func parseYaml(content string) (map[string]interface{}, error) {
+	var data map[string]interface{}
+	err := yaml.Unmarshal([]byte(content), &data)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 // getYamlPathValue safely extracts a value from a nested map using a dot-separated path
 func getYamlPathValue(data map[string]interface{}, path string) string {
 	parts := strings.Split(path, ".")
@@ -84,4 +94,32 @@ func getYamlPathValue(data map[string]interface{}, path string) string {
 		return ""
 	}
 	return fmt.Sprintf("%v", current)
+}
+
+// getYamlPathMap safely extracts a map from a nested map using a dot-separated path
+func getYamlPathMap(data map[string]interface{}, path string) map[string]string {
+	parts := strings.Split(path, ".")
+	var current interface{} = data
+
+	for _, part := range parts {
+		m, ok := current.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		current, ok = m[part]
+		if !ok {
+			return nil
+		}
+	}
+
+	m, ok := current.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	result := make(map[string]string)
+	for k, v := range m {
+		result[k] = fmt.Sprintf("%v", v)
+	}
+	return result
 }
