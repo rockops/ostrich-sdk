@@ -2,9 +2,9 @@ import logging
 import os
 import pytest
 import src.test.sdk as sdk
-import src.util as util
+import src.toolkit as toolkit
 
-# Get the runner modes from the environment variable (provided by ost template test)
+# Get the runner modes from the environment variable (provided by ost generator test)
 # Default to "ost,ostd" to allow double run by default in CI or when run directly
 runner_modes = os.environ.get("OST_RUNNER_MODES", "ost,ostd").split(",")
 
@@ -24,7 +24,7 @@ plugin:
   name: unit
   version: 0.0.1
   business_name: Unit Test
-template:
+generator:
   kind: unit-tests
   params:
     message: "Hello World"
@@ -50,7 +50,7 @@ plugin:
   name: unit
   version: 0.0.1
   business_name: Unit Test
-template:
+generator:
   kind: unit-tests
   params:
     message: "Hello World"
@@ -67,7 +67,7 @@ plugin:
   name: unit
   version: 0.0.1
   business_name: Unit Test
-template:
+generator:
   kind: unit-tests
   params:
     message: "Hello World"
@@ -104,44 +104,44 @@ template:
         """
 
     """
-    Checks that the template command is working correctly.
+    Checks that the generator command is working correctly.
     """
     def test_templateAlreadyExist(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"],0)
+        sdk.ost(["generator","--rm"],0)
         # Should fail because the folder already exists
-        sdk.ost(["template"],1)
+        sdk.ost(["generator"],1)
 
 
     """
-    Checks that the template command is working correctly.
+    Checks that the generator command is working correctly.
     """
     def test_template(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
         with open("unit/output.txt", "w") as file:
             file.write("Hello World")
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
         # Files added after first call should be deleted
         assert not os.path.exists("unit/output.txt"), "output.txt should not exist"
         # test folder should be present
         assert os.path.exists("unit/test"), "test folder should exist"
-        # _test folder should not be in the template
+        # _test folder should not be in the generator
         assert not os.path.exists("unit/_test"), "_test folder should not exist"
-        # _doc folder should not be in the template
+        # _doc folder should not be in the generator
         assert not os.path.exists("unit/_doc"), "_doc folder should not exist"
 
     """
-    Checks that the template command is working correctly with --force argument
+    Checks that the generator command is working correctly with --force argument
     """
     def test_templateForce(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
         with open("unit/output.txt", "w") as file:
             file.write("Hello World")
 
         # With --force, the dorectory is kept, the content is overwritten
-        sdk.ost(["template","--force"])
+        sdk.ost(["generator","--force"])
         sdk.checkFileContent("unit/output.txt","^Hello World$")
 
     """
@@ -149,33 +149,33 @@ template:
     """
     def test_variable(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
         sdk.checkFileContent("unit/unit/variable.txt","^Hello World$")
 
 
     """
-    Check the default filters from the src/util.py library
+    Check the default filters from the src/toolkit.py library
     """
     def test_filters(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
 
         filtersPath="unit/unit/filters.txt"
 
         sdk.cat(filtersPath)
 
         # here => prefix the path with the location of the source folder
-        sdk.checkFileContent(filtersPath, "^here:"+util.toUnixPath(tmp_path / "folder")+"$")
+        sdk.checkFileContent(filtersPath, "^here:"+toolkit.toUnixPath(tmp_path / "folder")+"$")
         # noslash => remove the trailing slash if any 
         sdk.checkFileContent(filtersPath, "^noslash1:folder_noslash$")
         sdk.checkFileContent(filtersPath, "^noslash2:folder_slash$")
         # md5hash => compute the md5 hash of the content with 'hashlib.md5(str.encode('utf-8')).hexdigest()'
         sdk.checkFileContent(filtersPath, "^md5hash:16802231b09f155b7a42a5dcaba33a74$")
-        # fromTemplate => appends the location of the current template
-        # To check, the template location is derived from the location of this current file
-        # fromTemplate => appends the location of the template
+        # fromTemplate => appends the location of the current generator
+        # To check, the generator location is derived from the location of this current file
+        # fromTemplate => appends the location of the generator
         sdk.checkFileContent(filtersPath, "^fromTemplate:" + sdk.getSDKPath("test-templates/unit-tests/folder")+"$")
-        # fromTemplates => appends the location of the global template folder
+        # fromTemplates => appends the location of the global generator folder
         sdk.checkFileContent(filtersPath, "^fromTemplates:" + sdk.getSDKPath("templates/folder")+"$")
         # fromJob => appends the location of the current job
         sdk.checkFileContent(filtersPath, "^fromJob:" + sdk.getSDKPath("test-templates/unit-tests/unit/folder")+"$")
@@ -194,17 +194,17 @@ template:
         sdk.checkFileContent(filtersPath, "^bool3:123,123$")
         sdk.checkFileContent(filtersPath, "^bool4:string,string$")
 
-        sdk.checkFileContent(filtersPath, "^input1:"+util.toUnixPath(tmp_path / "src/java")+"$")
-        sdk.checkFileContent(filtersPath, "^input2:"+util.toUnixPath(tmp_path / "src")+"$")
-        sdk.checkFileContent(filtersPath, "^input3:"+util.toUnixPath(tmp_path / "bin")+"$")
+        sdk.checkFileContent(filtersPath, "^input1:"+toolkit.toUnixPath(tmp_path / "src/java")+"$")
+        sdk.checkFileContent(filtersPath, "^input2:"+toolkit.toUnixPath(tmp_path / "src")+"$")
+        sdk.checkFileContent(filtersPath, "^input3:"+toolkit.toUnixPath(tmp_path / "bin")+"$")
 
 
     """ 
-    Check the default globals from the src/util.py library
+    Check the default globals from the src/toolkit.py library
     """
     def test_globals(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
 
         globalsPath="unit/unit/globals.txt"
 
@@ -221,7 +221,7 @@ template:
     """
     def test_defaults(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
 
         defaultPath="unit/unit/default.txt"
 
@@ -235,19 +235,19 @@ template:
     """ get a value on non existing key """
     def test_globals_keyNoExist(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYamlNoSubKey)
-        sdk.ost(["template","--rm"],1,"Key template.params.sub not defined")
+        sdk.ost(["generator","--rm"],1,"Key generator.params.sub not defined")
 
 
-    """ raise an error in the template """
+    """ raise an error in the generator """
     def test_globals_raise(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYamlRaise)
-        sdk.ost(["template","--rm"],1,"Hello World Unit Test")
+        sdk.ost(["generator","--rm"],1,"Hello World Unit Test")
 
 
     """ test isDebugEnabled helper """
     def test_globals_isDebugEnabled(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
         globalsPath="unit/unit/globals.txt"
 
         sdk.cat(globalsPath)
@@ -257,7 +257,7 @@ template:
     """ test the pretemplate mechanism """
     def test_pretemplate(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)
-        sdk.ost(["template","--rm"])
+        sdk.ost(["generator","--rm"])
         pretemplatePath="unit/unit/pretemplate.txt"
 
         sdk.cat(pretemplatePath)
@@ -336,10 +336,10 @@ template:
         sdk.ost(["--badarg"],1,"^ERROR")
 
 
-    """ test check config: ath template config """
+    """ test check config: ath generator config """
     def test_cmdlineConfig(self,tmp_path):
-        conf,_=sdk.ost(["template","config","unit-tests"],0,noDebug=True)
-        confYaml=sdk.parseYaml(conf)
+        constants,_=sdk.ost(["generator","config","unit-tests"],0,noDebug=True)
+        confYaml=sdk.parseYaml(constants)
         sdk.checkEntry(confYaml,"plugin.name","unit")
 
     """ test the execution of a task with dependencies """
@@ -360,7 +360,7 @@ template:
         sdk.ost(["-f","not_exist.yaml","run","display"],1)
    
 
-    """ exec with bas YAML file as plugin conf """
+    """ exec with bas YAML file as plugin constants """
     def test_runBadConfig(self,tmp_path):
         ostrichPluginYamlBad = """
 dashboard "Variables example":
@@ -375,25 +375,25 @@ dashboard "Variables example":
 
     """ test usage """
     def test_cmdlineTestBadArg(self,tmp_path):
-        sdk.ost(["template","test"],1,"^Usage")
-        sdk.ost(["template","test","info"],0,"ost template test")
+        sdk.ost(["generator","test"],1,"^Usage")
+        sdk.ost(["generator","test","info"],0,"ost generator test")
 
     """ test decription """
     def test_description(self,tmp_path):
-        sdk.ost(["template","describe","unit-tests"],0,["Description in markdown"])
+        sdk.ost(["generator","describe","unit-tests"],0,["Description in markdown"])
 
     """ test decription with no parameter """
     def test_descriptionBad(self,tmp_path):
-        sdk.ost(["template","describe"],1,["Invalid number of parameters"])
+        sdk.ost(["generator","describe"],1,["Invalid number of parameters"])
 
 
     """ test list """
     def test_templateList(self,tmp_path):
-        sdk.ost(["template","list"],0,["Available plugins"])
+        sdk.ost(["generator","list"],0,["Available plugins"])
 
     """ test install bad parameters """
     def test_templateInstall(self,tmp_path):
-        sdk.ost(["template","install"],1,["Invalid number of parameters"])
+        sdk.ost(["generator","install"],1,["Invalid number of parameters"])
 
 
     """ test config: bad command line"""
@@ -416,11 +416,11 @@ dashboard "Variables example":
 
     """ test config login for a Helm repo """
     def test_configHelm(self,tmp_path):
-        sdk.ost(["config","login","helm","http://unit-registry.com","myuser","mypassword"],0,"Credential registered for helm server http://unit-registry.com")
-        sdk.ost(["config","login","list"],0,"^helm: http://unit-registry.com=myuser:\\*\\*\\*$")
-        sdk.ost(["config","login","helm","list"],0,"^helm: http://unit-registry.com=myuser:\\*\\*\\*$")
-        sdk.ost(["config","logout","helm","http://unit-registry.com"],0,"Credential deleted for helm server http://unit-registry.com")
-        sdk.ost(["config","login","list"],0,[],"^helm: http://unit-registry.com=myuser:\\*\\*\\*$")
+        sdk.ost(["config","login","helm","http://unit-discovery.com","myuser","mypassword"],0,"Credential registered for helm server http://unit-discovery.com")
+        sdk.ost(["config","login","list"],0,"^helm: http://unit-discovery.com=myuser:\\*\\*\\*$")
+        sdk.ost(["config","login","helm","list"],0,"^helm: http://unit-discovery.com=myuser:\\*\\*\\*$")
+        sdk.ost(["config","logout","helm","http://unit-discovery.com"],0,"Credential deleted for helm server http://unit-discovery.com")
+        sdk.ost(["config","login","list"],0,[],"^helm: http://unit-discovery.com=myuser:\\*\\*\\*$")
 
     """ test config login for a Sonarqube (token based) """
     def test_configSonar(self,tmp_path):
@@ -448,7 +448,7 @@ plugin:
     name: unit
     version: 0.0.1
     business_name: Unit Test
-template:
+generator:
     kind: unit-tests
     params:
         folder: "folder"
@@ -485,7 +485,7 @@ template:
         os.environ["TEST_VALUE2"]="test value2"
         os.environ["QUOTE_VALUE"]="a value with \"quotes\""
 
-        sdk.ost(["template","--rm"],0)
+        sdk.ost(["generator","--rm"],0)
         sdk.cat("unit/unit/expand.txt")
 
         sdk.checkFileContent("unit/unit/expand.txt",[
@@ -509,8 +509,8 @@ template:
     # Test version check, with values equals the limit
     def test_versionsEqual(self,tmp_path):
 
-        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"template.params.minVersion","1.1.0")
-        updatedYaml = sdk.updateYaml(updatedYaml,"template.params.maxVersion","1.2.0")
+        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"generator.params.minVersion","1.1.0")
+        updatedYaml = sdk.updateYaml(updatedYaml,"generator.params.maxVersion","1.2.0")
 
         sdk.createEnv(tmp_path,updatedYaml)
         sdk.ost(["run","version"],0,["minVersion: 1.1.0 >= 1.1.0, maxVersion: 1.2.0 <= 1.2.0"])
@@ -519,8 +519,8 @@ template:
     # Test version check, with values equals the limit, with DEV version
     def test_versionsEqualDev(self,tmp_path):
 
-        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"template.params.minVersion","1.1.1-test")
-        updatedYaml = sdk.updateYaml(updatedYaml,"template.params.maxVersion","1.2.0-test")
+        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"generator.params.minVersion","1.1.1-test")
+        updatedYaml = sdk.updateYaml(updatedYaml,"generator.params.maxVersion","1.2.0-test")
 
         sdk.createEnv(tmp_path,updatedYaml)
         sdk.ost(["run","version"],0,["minVersion: 1.1.1-test >= 1.1.0, maxVersion: 1.2.0-test <= 1.2.0"])
@@ -529,8 +529,8 @@ template:
     # Test version check, with values above the limit (but correct)
     def test_versionsMoreLess(self,tmp_path):
 
-        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"template.params.minVersion","1.1.1")
-        updatedYaml = sdk.updateYaml(updatedYaml,"template.params.maxVersion","1.1.0")
+        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"generator.params.minVersion","1.1.1")
+        updatedYaml = sdk.updateYaml(updatedYaml,"generator.params.maxVersion","1.1.0")
 
         sdk.createEnv(tmp_path,updatedYaml)
         sdk.ost(["run","version"],0,["minVersion: 1.1.1 >= 1.1.0, maxVersion: 1.1.0 <= 1.2.0"])
@@ -539,18 +539,18 @@ template:
     # Test version check, with values incorrect minVersion
     def test_versionsBadMin(self,tmp_path):
 
-        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"template.params.minVersion","1.0.0")
-        updatedYaml = sdk.updateYaml(updatedYaml,"template.params.maxVersion","1.1.0")
+        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"generator.params.minVersion","1.0.0")
+        updatedYaml = sdk.updateYaml(updatedYaml,"generator.params.maxVersion","1.1.0")
 
         sdk.createEnv(tmp_path,updatedYaml)
-        sdk.ost(["run","version"],1,["Version 1.0.0 defined in template.params.minVersion must be greater than 1.1.0"])
+        sdk.ost(["run","version"],1,["Version 1.0.0 defined in generator.params.minVersion must be greater than 1.1.0"])
 
 
     # Test version check, with values incorrect minVersion
     def test_versionsBadMax(self,tmp_path):
 
-        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"template.params.minVersion","1.1.0")
-        updatedYaml = sdk.updateYaml(updatedYaml,"template.params.maxVersion","2.0.0")
+        updatedYaml = sdk.updateYaml(self.ostrichPluginYaml,"generator.params.minVersion","1.1.0")
+        updatedYaml = sdk.updateYaml(updatedYaml,"generator.params.maxVersion","2.0.0")
 
         sdk.createEnv(tmp_path,updatedYaml)
-        sdk.ost(["run","version"],1,["Version 2.0.0 defined in template.params.maxVersion must be lower than 1.2.0"])
+        sdk.ost(["run","version"],1,["Version 2.0.0 defined in generator.params.maxVersion must be lower than 1.2.0"])

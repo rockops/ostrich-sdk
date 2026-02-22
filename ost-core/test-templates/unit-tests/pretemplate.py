@@ -1,7 +1,7 @@
-from src.util import *
+from src.toolkit import *
 
 # Define custom filters and global fuctions
-# for the template
+# for the generator
 
 # Filter & global for unit tests
 def unitLocal(s):

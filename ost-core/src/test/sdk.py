@@ -333,11 +333,11 @@ def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=Non
 
 
 """
-Extracts the Helm template from a dry-run output
+Extracts the Helm generator from a dry-run output
 Args:
     output: the output of the dry-run command
 Returns:
-    the Helm template as a dictionary. the key is the name of the object (metadata.name)
+    the Helm generator as a dictionary. the key is the name of the object (metadata.name)
 """
 def extractHelmTemplateFromDryRun(output: string) -> dict:
   inTemplate: bool=False
@@ -432,21 +432,21 @@ def getSampleAppPath(file: string):
   return os.path.normpath(os.path.dirname(file)+"/../_samples")
 
 
-""" Get the template configuration """
+""" Get the generator configuration """
 def getTemplateConfig(file: string):
   with open(os.path.dirname(file)+"/../config.yaml", "r") as file:
     return yaml.safe_load(file.read())
 
 
-""" Execute a helm template on a specific file 
+""" Execute a helm generator on a specific file 
     Returns the parsed YAML content as a dictionary
     Args:
         folder: the folder where the helm chart is located
-        file: the file to template
+        file: the file to generator
         namespace: the namespace to set
-        values: the values to pass to the helm template as ["key1=value1", "key2=value2"]
-        valueFiles: the value files to pass to the helm template as ["file1.yaml", "file2.yaml"]
-        helmOptions: the additional options to pass to the helm template as ["--set","key1=value1"]
+        values: the values to pass to the helm generator as ["key1=value1", "key2=value2"]
+        valueFiles: the value files to pass to the helm generator as ["file1.yaml", "file2.yaml"]
+        helmOptions: the additional options to pass to the helm generator as ["--set","key1=value1"]
         aslist: if True, the result is a list of dictionaries.
                 If False, the result is a single dictionary. Function will fail if the result is not a single YAML document
         display: if True, the output is displayed 
@@ -466,25 +466,25 @@ def helmTemplate(folder: string, file: string="", namespace: string="", values=[
       assert False, "The result is not a single YAML document"
 
 
-""" Execute a helm template on a specific file 
+""" Execute a helm generator on a specific file 
     Returns the parsed YAML content as a raw string
     Args:
         folder: the folder where the helm chart is located
-        file: the file to template
+        file: the file to generator
         namespace: the namespace to set
-        values: the values to pass to the helm template as ["key1=value1", "key2=value2"]
-        valueFiles: the value files to pass to the helm template as ["file1.yaml", "file2.yaml"]
-        helmOptions: the additional options to pass to the helm template as ["--set","key1=value1"]
+        values: the values to pass to the helm generator as ["key1=value1", "key2=value2"]
+        valueFiles: the value files to pass to the helm generator as ["file1.yaml", "file2.yaml"]
+        helmOptions: the additional options to pass to the helm generator as ["--set","key1=value1"]
         display: if True, the output is displayed 
 """
 def helmTemplateAsString(folder: string, file: string="", namespace: string="", values=[], valueFiles=[], helmOptions=[],check=True, display=True) -> string :
 
   if(len(file)==0):
-    logging.info("Helm template folder %s", folder)
-    tabParams=["helm", "template"]
+    logging.info("Helm generator folder %s", folder)
+    tabParams=["helm", "generator"]
   else:
-    logging.info("Helm template folder %s for file %s", folder, file)
-    tabParams=["helm", "template", "-s", file]
+    logging.info("Helm generator folder %s for file %s", folder, file)
+    tabParams=["helm", "generator", "-s", file]
 
   tabParams.extend(helmOptions)
 
@@ -549,7 +549,7 @@ def helmTemplateAsString(folder: string, file: string="", namespace: string="", 
 
     p.wait()
   if check:
-    assert p.returncode == 0, "Helm template command failed"
+    assert p.returncode == 0, "Helm generator command failed"
 
   return result
 

@@ -2,9 +2,9 @@ import logging
 import os
 import pytest
 import src.test.sdk as sdk
-import src.util as util
+import src.toolkit as toolkit
 
-# Get the runner modes from the environment variable (provided by ost template test)
+# Get the runner modes from the environment variable (provided by ost generator test)
 # Default to "ost,ostd" to allow double run by default in CI or when run directly
 runner_modes = os.environ.get("OST_RUNNER_MODES", "ost,ostd").split(",")
 
@@ -24,7 +24,7 @@ plugin:
   name: unit
   version: 0.0.1
   business_name: Unit Test
-template:
+generator:
   kind: unit-tests
   runtime: docker
   runner:
@@ -128,7 +128,7 @@ template:
         # Test 4: Explicit Output Dir
         output_dir = tmp_path / "custom_output"
         str_out = str(output_dir)
-        sdk.ost(["-o", str_out,"run","docker_env","--rm"],0,f"^TEMPLATE_DIR={util.toUnixPath(str_out)}$")
+        sdk.ost(["-o", str_out,"run","docker_env","--rm"],0,f"^TEMPLATE_DIR={toolkit.toUnixPath(str_out)}$")
 
     def test_docker_vars(self,tmp_path):
         sdk.createEnv(tmp_path,self.ostrichPluginYaml)

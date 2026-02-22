@@ -4,8 +4,8 @@ import json
 from unittest.mock import MagicMock, patch, ANY
 import yaml
 import logging
-from src import operations, util
-from src.ostrichException import OstrichException
+from src import engine, toolkit
+from src.exceptions import OstrichError
 
 class MockParams:
     def __init__(self):
@@ -18,7 +18,7 @@ class MockParams:
         self.skip = []
         self.executedTasks = []
         # Default runtime
-        self._plugin_conf = {"template.runtime": "docker"}
+        self._plugin_conf = {"generator.runtime": "docker"}
 
     def getPluginConf(self, key, default=None):
         return self._plugin_conf.get(key, default)
@@ -29,14 +29,14 @@ def params():
 
 @pytest.fixture
 def mock_util_funcs():
-    with patch("src.util.safeLoad") as mock_load, \
-         patch("src.util.getLocation") as mock_loc:
+    with patch("src.toolkit.safeLoad") as mock_load, \
+         patch("src.toolkit.getLocation") as mock_loc:
         mock_loc.return_value = "/current/location"
         yield mock_load, mock_loc
 
 @pytest.fixture
 def mock_run():
-    with patch("src.operations.run") as mock_r:
+    with patch("src.engine.run") as mock_r:
         # Default behavior: success (returncode 0), stdout="Docker version..."
         mock_r.return_value = MagicMock(returncode=0, stdout="Docker version 20.10.0")
         yield mock_r
@@ -64,7 +64,7 @@ def test_container_simple_command(params, mock_util_funcs, mock_run, mock_files)
         "runner": {"image": "busybox"}
     }
 
-    operations.container(operation, params)
+    engine.container(operation, params)
 
     # Verify run call
     # calls[0] is verification (docker -v)
@@ -99,7 +99,7 @@ def test_container_list_command(params, mock_util_funcs, mock_run, mock_files):
         "commands": [{"cmd": ["ls", "-la"], "image": "alpine"}],
     }
 
-    operations.container(operation, params)
+    engine.container(operation, params)
     
     args = mock_run.call_args_list[-1][0][0]
     assert "alpine" in args
@@ -119,13 +119,13 @@ def test_container_map_command(params, mock_util_funcs, mock_run, mock_files):
     }
 
     # This test might fail if map support isn't implemented as expected!
-    operations.container(operation, params)
+    engine.container(operation, params)
     
     args = mock_run.call_args_list[-1][0][0]
     assert "alpine" in args
     # Expected: -n 5 --flag
     # If implementation uses .extend(dict), it would just be keys "-n", "--flag"
-    # Logic in operations.py needs to handle dict specifically
+    # Logic in engine.py needs to handle dict specifically
     
     # Let's inspect what we got
     print(f"DEBUG ARGS: {args}")
@@ -146,7 +146,7 @@ def test_container_entrypoint_override(params, mock_util_funcs, mock_run, mock_f
         "commands": [{"cmd": "run", "entrypoint": "/custom/entry"}]
     }
 
-    operations.container(operation, params)
+    engine.container(operation, params)
     args = mock_run.call_args_list[-1][0][0]
     
     assert "--entrypoint" in args
@@ -154,7 +154,7 @@ def test_container_entrypoint_override(params, mock_util_funcs, mock_run, mock_f
     assert args[idx+1] == "/custom/entry"
 
 def test_container_podman_runtime(params, mock_util_funcs, mock_run, mock_files):
-    params._plugin_conf["template.runtime"] = "podman"
+    params._plugin_conf["generator.runtime"] = "podman"
     mock_load, _ = mock_util_funcs
     mock_load.return_value = {
         "commands": ["echo podman"],
@@ -164,7 +164,7 @@ def test_container_podman_runtime(params, mock_util_funcs, mock_run, mock_files)
     # Update mock to say "Podman version..."
     mock_run.return_value = MagicMock(returncode=0, stdout="Podman version 3.0")
 
-    operations.container("op_pod", params)
+    engine.container("op_pod", params)
     
     args = mock_run.call_args_list[-1][0][0]
     assert args[0] == "podman"
@@ -179,7 +179,7 @@ def test_container_env_vars(params, mock_util_funcs, mock_run, mock_files):
         "env": {"TEST_VAR": "TEST_VAL"}
     }
 
-    operations.container("op_env", params)
+    engine.container("op_env", params)
     args = mock_run.call_args_list[-1][0][0]
     
     # Check env var injection
@@ -196,7 +196,7 @@ def test_container_missing_image(params, mock_util_funcs, mock_run, mock_files):
         # No runner.image and no command image
     }
 
-    with pytest.raises(OstrichException) as excinfo:
-        operations.container("op_fail", params)
+    with pytest.raises(OstrichError) as excinfo:
+        engine.container("op_fail", params)
     
     assert "No container image defined" in str(excinfo.value)
