@@ -5,40 +5,53 @@ from typing import Any
 import yaml
 import src.util as util
 
-parsedConfig: Any=None
+# Internal cache for global settings
+global_settings_cache: Any = None
 
-def loadConf():
-    global parsedConfig
+def initialize_global_settings():
+    """Reads the static global configuration file from the application's root."""
+    global global_settings_cache
+    target = os.path.join(os.path.dirname(sys.argv[0]), "config.yaml")
+    with open(target, "r") as f:
+        global_settings_cache = yaml.safe_load(f)
 
-    with open(os.path.dirname(sys.argv[0])+"/config.yaml") as f:
-        parsedConfig = yaml.safe_load(f)
+def resolve_setting_value(key, params: util.Params, fallback=None):
+    """
+    Resolution hierarchy for settings:
+    1. Plugin-specific configuration (via params)
+    2. Global configuration file
+    3. Environment variables (prefix 'os_', dot replaced by underscore)
+    4. Provided default value
+    """
+    
+    # Priority 1: Plugin Context
+    val = params.fetch_plugin_setting(key, "__MISSING__")
+    if val != "__MISSING__":
+        logging.debug("Param '%s' -> %s [Plugin Scope]", key, val)
+        return val
+        
+    # Priority 2: Global Configuration Cache
+    try:
+        cursor = global_settings_cache
+        for segment in key.split("."):
+            cursor = cursor[segment]
+        logging.debug("Param '%s' -> %s [Global Scope]", key, cursor)
+        return cursor
+    except Exception:
+        pass
 
-# Gets the conf key :
-# Check in the plugin configuration,
-# Else reads in the global config file
-# Else Check it an env var exist, replacing . by _ prefixed by ost 
-# Finaly, returns the default value
-def getConf(key,params: util.Params,defval=None):
+    # Priority 3: Environmental Override
+    env_key = "os_" + key.replace('.', '_')
+    env_val = os.environ.get(env_key)
+    if env_val is not None:
+        logging.debug("Param '%s' -> %s [Env: %s]", key, env_val, env_key)
+        return env_val
 
-    ret=params.getPluginConf(key,"__NOTFOUND__")
+    # Priority 4: Default Fallback
+    logging.debug("Param '%s' -> %s [Fallback]", key, fallback)
+    return fallback
 
-    if(ret != "__NOTFOUND__"):
-        logging.debug("%s=%s [got from plugin conf]",key,ret)
-        return ret
-    else:
-        try:
-            ret=parsedConfig
-            for k in key.split("."):
-                ret=ret[k]
-            logging.debug("%s=%s [got from global config file]",key,ret)
-            return ret
-
-        except Exception:
-            envvar="os_"+key.replace('.','_')
-            ret = os.environ.get(envvar)
-            if ret!=None:
-                logging.debug("%s=%s [got from ENV %s]",key,ret,envvar)
-                return ret
-            else:
-                logging.debug("%s=%s [default value]",key,defval)
-                return defval
+# Compatibility aliases
+loadConf = initialize_global_settings
+getConf = resolve_setting_value
+parsedConfig = global_settings_cache

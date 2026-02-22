@@ -1,9 +1,6 @@
 import json
-from jsonpath_ng.ext import parse
-from kubernetes import config, client
 import logging
 import os
-from pathlib import Path
 import re
 import requests
 import selectors
@@ -12,747 +9,390 @@ import subprocess
 import sys
 import time
 import yaml
+from pathlib import Path
+from jsonpath_ng.ext import parse
+from kubernetes import config, client
 
-
-
-def getSDKPath(relative_path):
-    """
-    Get the absolute path of a file/directory within the SDK, 
-    matching the environment (host or ostd container).
-    """
+def resolve_sdk_resource_path(relative):
+    """Calculates the absolute path of a resource based on execution environment."""
     if os.getenv("USE_OSTD", "false").lower() == "true":
-        return os.path.normpath("/sdk/" + relative_path).replace("\\", "/")
+        return os.path.normpath(f"/sdk/{relative}").replace("\\", "/")
+    
+    # Path calculation for host environment
+    parent_dir = Path(__file__).resolve().parent
+    root_dir = parent_dir.parent.parent
+    return str((root_dir / relative).resolve()).replace("\\", "/")
+
+# Terminal Aesthetics
+CLR_DEFAULT = '\033[0;m'
+CLR_WARN    = '\033[38;5;11m'
+CLR_MUTE    = '\033[38;5;8m'
+CLR_FAIL    = '\033[38;5;9m'
+CLR_SUCCESS = '\033[38;5;10m'
+CLR_INFO    = '\033[38;5;12m'
+CLR_STRESS  = '\033[38;5;13m'
+CLR_DEBUG   = '\033[38;5;14m'
+FMT_UNDER   = '\033[4m'
+
+def output_indented_lines(text: str):
+    """Prints each line with a 2-space prefix."""
+    for line in text.splitlines():
+        if line.strip():
+            print(f"  {line.rstrip()}\r\n", end="", flush=True)
+
+def modify_yaml_dictionary(data: dict, path_key: str, val: any, is_yaml_fragment: bool = False) -> dict:
+    """Updates a nested dictionary value using a dot-notation key."""
+    segments = path_key.split('.')
+    cursor = data
+    for bit in segments[:-1]:
+        if bit not in cursor:
+            cursor[bit] = {}
+        cursor = cursor[bit]
+    
+    cursor[segments[-1]] = yaml.safe_load(val) if is_yaml_fragment else val
+    return data
+
+def transform_yaml_string(raw_yaml: str, path_key: str, val: any, is_yaml_fragment: bool = False) -> str:
+    """Parses, modifies, and re-serializes a YAML string."""
+    obj = yaml.safe_load(raw_yaml)
+    updated = modify_yaml_dictionary(obj, path_key, val, is_yaml_fragment)
+    return yaml.dump(updated)
+
+def patch_yaml_file(file_path: str, path_key: str, val: any, is_yaml_fragment: bool = False):
+    """Reads a YAML file, applies a modification, and writes it back."""
+    with open(file_path, 'r') as f:
+        original = f.read()
+    updated = transform_yaml_string(original, path_key, val, is_yaml_fragment)
+    with open(file_path, 'w') as f:
+        f.write(updated)
+
+def verify_regex_match(text: str, pattern: str):
+    """Ensures at least one line in the text matches the provided regex."""
+    logging.info("Validating output against pattern: %s", pattern)
+    for line in text.splitlines():
+        if re.match(pattern, line):
+            logging.info("Regex hit: %s", line)
+            return
+    assert False, f"Constraint violation: No line matches '{pattern}'"
+
+def spawn_monitored_process(argv: list, expected_code: int = None, must_have: str = None, must_not_have: str = None):
+    """Executes a command, streams output, and validates exit status/content."""
+    logging.info("Launching process: %s", argv)
+    
+    full_output = ""
+    if os.name == 'nt':
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate()
+        if out:
+            chunk = out.decode('utf-8', errors='replace')
+            output_indented_lines(chunk)
+            full_output += chunk
+        if err:
+            chunk = err.decode('utf-8', errors='replace')
+            output_indented_lines(chunk)
+            full_output += chunk
     else:
-        # Get the path on host
-        # This file is in src/src/test/sdk.py, so ../../ is src/
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        sdk_root = os.path.abspath(script_dir + "/../../")
-        return os.path.abspath(os.path.join(sdk_root, relative_path)).replace("\\", "/")
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        watcher = selectors.DefaultSelector()
+        watcher.register(proc.stdout, selectors.EVENT_READ)
+        watcher.register(proc.stderr, selectors.EVENT_READ)
 
+        print(CLR_WARN, flush=True)
+        active = True
+        while active:
+            for key, _ in watcher.select():
+                blob = key.fileobj.read1().decode()
+                if not blob:
+                    active = False
+                else:
+                    color_prefix = "" if key.fileobj is proc.stdout else CLR_FAIL
+                    output_indented_lines(color_prefix + blob + (CLR_WARN if key.fileobj is proc.stderr else ""))
+                    full_output += blob
+        print(CLR_DEFAULT, flush=True)
+        proc.wait()
 
-RESET_ALL='\033[0;m'
-YELLOW='\033[38;5;11m'
-GREY='\033[38;5;8m'
-RED='\033[38;5;9m'
-GREEN='\033[38;5;10m'
-BLUE='\033[38;5;12m'
-MAGENTA='\033[38;5;13m'
-CYAN='\033[38;5;14m'
-
-UNDER='\033[4m'
-
-
-""" Print indented text """
-def printIndent(lines: string):
-  for line in lines.splitlines():
-    if(len(line)>0):
-      print("  "+line.rstrip("\r\n ")+"\r\n",end="",flush=True)
+    logging.info("Process exited with code: %s", proc.returncode)
+    if expected_code is not None:
+        assert proc.returncode == expected_code, f"Exit mismatch: Expected {expected_code}, got {proc.returncode}"
     
-
-""" Display a message (sample helper function) """
-def display():
-    print("Sample helper function")
-
-
-"""
-sets a value in a yaml content.
-Args:
-    yamlContent: the yaml content as a dictionnary
-    key: the key to set
-    value: the value to set
-    yamlValue: if True, the value is a yaml content (as string). In this case it is parsed as yaml
-Returns:
-    the updated yaml content as a dict
-"""
-def updateYamlDict(yamlContent: dict, key: string, value: string, yamlValue: bool=False) -> dict :
-
-    keys = key.split('.')
-    d = yamlContent
-
-    # Create all intermediate dictionaries
-    for k in keys[:-1]:
-        if k not in d:
-            d[k] = {}
-        d = d[k]
-    # Set the value
-    if yamlValue:
-        d[keys[-1]] = yaml.safe_load(value)
-    else:
-        d[keys[-1]] = value
-
-    return yamlContent
-
-
-
-
-"""
-sets a value in a yaml content.
-Args:
-    yamlContent: the yaml content as a string
-    key: the key to set
-    value: the value to set
-    yamlValue: if True, the value is a yaml content (as string). In this case it is parsed as yaml
-Returns:
-    the updated yaml content as a string
-"""
-def updateYaml(yamlContent, key, value, yamlValue=False):
-    data = yaml.safe_load(yamlContent)
-
-    updatedYaml = updateYamlDict(data, key, value, yamlValue)
-
-    return yaml.dump(updatedYaml)
-
-
-"""
-sets a value in a yaml file
-Args:
-    yamlFile: the yaml file to update
-    key: the key to set
-    value: the value to set
-    yamlValue: if True, the value is a yaml content (as string). In this case it is parsed as yaml
-"""
-def updateYamlFile(yamlFile, key, value, yamlValue=False):
-    
-    with open(yamlFile, 'r') as file:
-      yamlContent = file.read()
-
-    updatedYaml = updateYaml(yamlContent, key, value, yamlValue)
-
-    with open(yamlFile, 'w') as file:
-      file.write(updatedYaml)
-
-
-"""
-Checks the content of a string using a regex
-Args:
-    content: the content to check
-    regex: the regex to check
-"""
-def checkContentRegex(content: string, regex: string):
-  logging.info("Checking content for regex %s", regex)
-  for line in content.splitlines():
-    if(re.match(regex, line)):
-      logging.info("Match: %s", line)
-      return
-  assert False, "Content does not match the regex: %s" % regex  
-  #assert re.match(regex, content), "Content does not match the regex: %s" % regex
-
-
-
-"""
-Executes a command and checks the return code and the output
-Args:
-    cmd: the command to execute as an array
-    expectedReturnCode: the expected return code
-    outputContent: the expected content in the output as a regex
-    noOutputContent: the content that should not be in the output as a regex
-"""
-def run(cmd: string, expectedReturnCode: int = None, outputContent: string = None, noOutputContent: string = None):
-  logging.info("Executing command %s", cmd)
-
-
-  if os.name == 'nt':
-    p = subprocess.Popen(tabParams, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = p.communicate()
-    
-    if stdout:
-        decoded = stdout.decode('utf-8', errors='replace')
-        printIndent(decoded)
-        result += decoded
-    
-    if stderr:
-        decoded = stderr.decode('utf-8', errors='replace')
-        printIndent(decoded)
-        result += decoded
+    if must_have:
+        assert re.search(must_have, full_output), f"Output missing required pattern: '{must_have}'"
+    if must_not_have:
+        assert not re.search(must_not_have, full_output), f"Output contains forbidden pattern: '{must_not_have}'"
         
-    return_code = p.returncode
-  else:
-    p = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    return full_output, proc.returncode
 
-    sel = selectors.DefaultSelector()
-    sel.register(p.stdout, selectors.EVENT_READ)
-    sel.register(p.stderr, selectors.EVENT_READ)
+def execute_ost_command(args=[], expected_status=0, required_patterns=None, forbidden_patterns=None, quiet=False):
+    """Wrapper for running the 'ost' or 'ostd' CLI tools in tests."""
+    base_dir = Path(__file__).resolve().parent
+    mode_ostd = os.getenv("USE_OSTD", "false").lower() == "true"
+    
+    cmd_base = []
+    if mode_ostd:
+        import platform
+        os_type = platform.system().lower()
+        suffix = ".exe" if os_type == "windows" else ""
+        os_dir = "windows" if os_type == "windows" else ("darwin" if os_type == "darwin" else "linux")
+        binary = base_dir.parent.parent.parent / "bin" / os_dir / f"ostd{suffix}"
+        
+        cmd_base = [str(binary), "--nologo"]
+        tag_env = os.getenv("OST_IMAGE_TAG")
+        if tag_env:
+            cmd_base.extend(["--image", "ostrich-sdk", "--tag", tag_env])
+            
+        for env_k, env_v in os.environ.items():
+            if env_k.startswith(("TEST_", "QUOTE_")):
+                cmd_base.extend(["-e", f"{env_k}={env_v}"])
+    else:
+        entry_script = (base_dir.parent.parent / "ost").resolve()
+        cmd_base = [sys.executable, str(entry_script), "--nologo"]
 
-    result=""
-
-    toRead=True
-    print(YELLOW,flush=True)
-    while toRead:
-      for key, _ in sel.select():
-        data = key.fileobj.read1().decode()
-        if not data:
-            toRead=False
-        else:
-          if key.fileobj is p.stdout:
-              printIndent(data)
-              result += data
-          else:
-              printIndent(RED+data+YELLOW)
-              result += data
-
-    print(RESET_ALL,flush=True)
+    if logging.getLogger().getEffectiveLevel() <= logging.DEBUG and not quiet:
+        cmd_base.append("--debug")
+        
+    cmd_base.extend(args)
+    logging.info("Invoking Ostrich CLI: %s", " ".join(cmd_base))
+    
+    raw_log = ""
+    if os.name == 'nt':
+        p = subprocess.Popen(cmd_base, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        o, e = p.communicate()
+        if o:
+            msg = o.decode('utf-8', errors='replace')
+            output_indented_lines(msg)
+            raw_log += msg.replace("\r", "")
+        if e:
+            msg = e.decode('utf-8', errors='replace')
+            output_indented_lines(msg)
+            raw_log += msg.replace("\r", "")
+    else:
+        p = subprocess.Popen(cmd_base, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        mon = selectors.DefaultSelector()
+        mon.register(p.stdout, selectors.EVENT_READ)
+        mon.register(p.stderr, selectors.EVENT_READ)
+        
+        print(CLR_DEBUG, flush=True)
+        running = True
+        while running:
+            for k, _ in mon.select():
+                data = k.fileobj.read1().decode()
+                if not data: running = False
+                else: 
+                    output_indented_lines(data)
+                    raw_log += data
+        print(CLR_DEFAULT, flush=True)
 
     p.wait()
-    return_code = p.returncode
+    if p.returncode != expected_status:
+        assert False, f"CLI Error: expected {expected_status}, got {p.returncode}"
 
-  logging.info("Return code: %s", return_code)
-  if expectedReturnCode != None:
-    assert p.returncode == expectedReturnCode, f"Command {str(cmd)} exit code should be {expectedReturnCode} but is {p.returncode}"
+    # Pattern validation
+    for spec, negate in [(required_patterns, False), (forbidden_patterns, True)]:
+        if spec:
+            items = spec if isinstance(spec, list) else [spec]
+            for pat in items:
+                found = bool(re.search(pat, raw_log, re.MULTILINE))
+                if negate:
+                    assert not found, f"Forbidden pattern '{pat}' found in output"
+                else:
+                    assert found, f"Required pattern '{pat}' missing from output"
 
-  if outputContent:
-    logging.info("Checking for %s", outputContent)
-    assert re.search(outputContent, result), "Output does not match regex: '%s'" % outputContent
+    return raw_log, p.returncode
 
-  if noOutputContent:
-    logging.info("Checking for %s", noOutputContent)
-    assert not re.search(noOutputContent, result), "Output should not match regex: '%s'" % noOutputContent
+def digest_helm_output(raw_text: str) -> dict:
+    """Parses multi-document YAML from Helm dry-run markers."""
+    capture, buf = False, ""
+    for line in raw_text.splitlines():
+        if "=== TEMPLATE ===" in line: capture = True
+        elif "=== END TEMPLATE ===" in line: return parse_yamls_to_map(buf)
+        elif capture: buf += line + "\n"
+    return {}
 
-  return result, p.returncode
+def scaffold_test_dir(base_path, yaml_body=None):
+    """Sets up a temporary ostrich workspace."""
+    cfg = base_path / "ostrich.yaml"
+    os.chdir(base_path)
+    if yaml_body:
+        with open(cfg, "w") as f: f.write(yaml_body)
 
+def switch_to_sample(file_ref, app_name):
+    """Jumps to a pre-defined sample application directory."""
+    target = os.path.join(resolve_sample_base(file_ref), app_name)
+    os.chdir(target)
+    logging.info("Workspace shifted to: %s", target)
 
-""" 
-Execute the ost command 
-Args:
-    params: the parameters to pass to the command
-    expectedReturnCode: the expected return code
-    outputContent: the expected content in the output
-        If a list, each element is checked
-        Else the content is checked as a whole
-    noOutputContent: the content that should not be in the output
-Returns: the output of the command + the return code as a tuple
-"""
-def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=None, noDebug=False):
-  
-  script_dir = os.path.dirname(os.path.abspath(__file__))
-  
-  # Check if we should use ostd (Docker) instead of ost (Python)
-  use_ostd = os.getenv("USE_OSTD", "false").lower() == "true"
-  
-  if use_ostd:
-    import platform
-    system = platform.system().lower()
-    if system == "linux":
-        ostd_path = script_dir+"/../../../bin/linux/ostd"
-    elif system == "darwin":
-        ostd_path = script_dir+"/../../../bin/darwin/ostd"
-    elif system == "windows":
-        ostd_path = script_dir+"/../../../bin/windows/ostd.exe"
+def write_test_file(path, data):
+    with open(path, "w") as f: f.write(data)
+
+def audit_file_content(path, positive=None, negative=None):
+    """Verifies the content of a file against positive and negative regex rules."""
+    with open(path, "r") as f:
+        body = f.read()
+        if positive:
+            for p in (positive if isinstance(positive, list) else [positive]):
+                assert re.search(p, body, re.MULTILINE), f"File {path} lacks expected pattern '{p}'"
+        if negative:
+            for n in (negative if isinstance(negative, list) else [negative]):
+                assert not re.search(n, body, re.MULTILINE), f"File {path} contains forbidden pattern '{n}'"
+
+def stream_file(target_path):
+    """Outputs the content of a file to the logger/stdout."""
+    with open(target_path, "r", encoding="utf-8") as f:
+        msg = f.read()
+        print(f"\n--- Reading {target_path} ---\n{CLR_SUCCESS}{msg}{CLR_DEFAULT}\n--- EOF ---\n")
+
+def fetch_doc_sample(caller_file):
+    with open(os.path.join(os.path.dirname(caller_file), "../_doc/ostrich.yaml"), "r") as f:
+        return f.read()
+
+def resolve_sample_base(caller_file):
+    return os.path.normpath(os.path.join(os.path.dirname(caller_file), "..", "_samples"))
+
+def fetch_template_node_config(caller_file):
+    with open(os.path.join(os.path.dirname(caller_file), "../config.yaml"), "r") as f:
+        return yaml.safe_load(f.read())
+
+def run_helm_render(chart_dir, sub_file="", ns="", overrides=[], val_files=[], extra_flags=[], multi=False, verbose=True):
+    """Invokes 'helm template' and retrieves parsed YAML results."""
+    args = ["helm", "template"]
+    if sub_file: args.extend(["-s", sub_file])
+    args.extend(extra_flags)
+    
+    for o in overrides: args.extend(["--set", o])
+    for vf in val_files: args.extend(["-f", vf])
+    
+    if ns:
+        args.extend(["--namespace", ns, "--set", f"global.namespace={ns}"])
+    
+    args.append(chart_dir)
+    raw = ""
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    if os.name == 'nt':
+        o, e = proc.communicate()
+        if verbose:
+            if o: output_indented_lines(o.decode(errors='replace'))
+            if e: output_indented_lines(CLR_FAIL + e.decode(errors='replace') + CLR_WARN)
+        raw = o.decode(errors='replace')
     else:
-        raise Exception(f"Unsupported OS: {system}")
+        sel = selectors.DefaultSelector()
+        sel.register(proc.stdout, selectors.EVENT_READ)
+        sel.register(proc.stderr, selectors.EVENT_READ)
+        if verbose: print(CLR_WARN, flush=True)
+        active = True
+        while active:
+            for k, _ in sel.select():
+                data = k.fileobj.read1().decode()
+                if not data: active = False
+                else:
+                    if verbose: output_indented_lines(CLR_FAIL + data + CLR_WARN if k.fileobj is proc.stderr else data)
+                    if k.fileobj is proc.stdout: raw += data
+        if verbose: print(CLR_DEFAULT, flush=True)
+        proc.wait()
+
+    assert proc.returncode == 0, "Helm rendering failed"
+    docs = list(yaml.safe_load_all(raw))
+    return docs if multi else docs[0]
+
+def validate_jsonpath(blob: dict, query: str, goal: str, use_regex: bool = False):
+    """Checks a specific node in a dictionary using JSONPath."""
+    matches = [m.value for m in parse(query).find(blob)]
+    assert matches, f"No matches for JSONPath '{query}'"
+    
+    found = False
+    for m in matches:
+        if use_regex:
+            if re.match(goal, str(m)): (found := True); break
+        else:
+            if str(m) == goal: (found := True); break
+    
+    assert found, f"Match failed for '{query}'. Wanted '{goal}', got {matches}"
+
+def parse_yamls_to_map(content: str) -> dict:
+    """Parses multi-doc YAML into a name-indexed/kind-indexed lookup table."""
+    lookup = {}
+    for i, doc in enumerate(yaml.safe_load_all(content)):
+        if doc and doc.get('metadata', {}).get('name'):
+            n, k = doc['metadata']['name'], doc.get('kind', 'Unknown')
+            lookup[n] = doc
+            lookup[f"{k}/{n}"] = doc
+    return lookup
+
+def fetch_env_checked(key, fallback=None):
+    res = os.getenv(key)
+    if res is None and fallback is None:
+        assert False, f"Missing required env var: {key}"
+    return res if res is not None else fallback
+
+def perform_http_get(uri, status=None, verbose=False, max_retries=0):
+    """Executes a GET request with optional verification and retries."""
+    for attempt in range(max_retries + 1):
+        resp = requests.get(uri, verify=False)
+        if verbose:
+            logging.info("GET %s -> %d\n%s", uri, resp.status_code, resp.text)
         
-    tabParams=[ostd_path, "--nologo"]
-    custom_tag = os.getenv("OST_IMAGE_TAG")
-    if custom_tag:
-      tabParams.extend(["--image", "ostrich-sdk", "--tag", custom_tag])
-    # Pass environment variables starting with TEST_ or QUOTE_ to ostd
-    for k, v in os.environ.items():
-        if k.startswith("TEST_") or k.startswith("QUOTE_"):
-            tabParams.extend(["-e", f"{k}={v}"])
-  else:
-    ost_path = os.path.normpath(os.path.join(script_dir, "..", "..", "ost"))
-    tabParams=[sys.executable, ost_path, "--nologo"]
-
-  if logging.root.level <= logging.DEBUG and not noDebug:
-    tabParams.append("--debug")      
-
-  tabParams.extend(params)
-
-  logging.info("Executing command %s", " ".join(tabParams))
-  result=""
-
-  if os.name == 'nt':
-    p = subprocess.Popen(tabParams, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout, stderr = p.communicate()
+        if status is None or resp.status_code == status:
+            return resp
+        if attempt < max_retries:
+            time.sleep(1)
     
-    if stdout:
-        decoded = stdout.decode('utf-8', errors='replace')
-        printIndent(decoded)
-        result += decoded.replace("\r", "")
-    
-    if stderr:
-        decoded = stderr.decode('utf-8', errors='replace')
-        printIndent(decoded)
-        result += decoded.replace("\r","")
+    assert False, f"HTTP Error: Expected {status}, got {resp.status_code} after retries"
 
-  else:
-    p = subprocess.Popen(
-        tabParams, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
-
-    sel = selectors.DefaultSelector()
-    sel.register(p.stdout, selectors.EVENT_READ)
-    sel.register(p.stderr, selectors.EVENT_READ)
-
-    toRead=True
-    print(CYAN,flush=True)
-    while toRead:
-      for key, _ in sel.select():
-        data = key.fileobj.read1().decode()
-        if not data:
-            toRead=False
-        else:
-          if key.fileobj is p.stdout:
-              printIndent(data)
-              result += data
-          else:
-              printIndent(data)
-              result += data
-
-    print(RESET_ALL,flush=True)
-
-  p.wait()
-  return_code = p.returncode
-
-  logging.info("Return code: %s", return_code)
-
-  assert return_code == expectedReturnCode, f"ost command exit code should be {expectedReturnCode} but is {return_code}"
-
-  logging.debug("Result:----- \n%s\n-----:End Result", result)
-
-  if outputContent:
-    if isinstance(outputContent, list):
-      for expected in outputContent:
-        logging.info("Checking for: %s", expected)
-        assert re.search(expected, result,re.MULTILINE), "File content does not contain: '%s'" % expected
-    else:
-      logging.info("Checking for: %s", outputContent)
-      assert re.search(outputContent, result,re.MULTILINE), "File content does not contain: '%s'" % outputContent
-
-  if noOutputContent:
-    if isinstance(noOutputContent, list):
-      for unexpected in noOutputContent:
-        logging.info("Checking for NOT: %s", unexpected)
-        assert not re.search(unexpected, result,re.MULTILINE), "File content should not contain: '%s'" % unexpected
-    else:
-      logging.info("Checking for NOT: %s", noOutputContent)
-      assert not re.search(noOutputContent, result,re.MULTILINE), "File content should not contain: '%s'" % noOutputContent
-
-  return result, return_code
-
-
-"""
-Extracts the Helm template from a dry-run output
-Args:
-    output: the output of the dry-run command
-Returns:
-    the Helm template as a dictionary. the key is the name of the object (metadata.name)
-"""
-def extractHelmTemplateFromDryRun(output: string) -> dict:
-  inTemplate: bool=False
-  ret: string=""
-
-  for line in output.splitlines():
-    if(inTemplate and "=== END TEMPLATE ===" not in line):
-      ret+=line+"\n"
-    else:
-      if("=== TEMPLATE ===" in line):
-        inTemplate=True
-      elif("=== END TEMPLATE ===" in line):
-        return parseYamlMultiDoc(ret)
-  return {}
-
-
-""" Create a temporary environment """
-def createEnv(tmp_path, content=None):
-  temp_file_path = tmp_path / "ostrich.yaml"
-  logging.info("Created temporary file: %s", temp_file_path)
-  os.chdir(tmp_path)
-  if content:
-    with open(temp_file_path, "w") as file:
-        file.write(content)
-
-
-""" 
-Change the current directory to a sample application 
-Args:
-  location: the location of the calling file (use __file__)
-  name: the name of the sample application
-"""
-def sampleEnv(location: string, name: string):
-  os.chdir(getSampleAppPath(location)+ "/"+name)
-  logging.info("Changed directory to %s", os.getcwd())
-
-
-""" Create a file with a specific content """
-def createFile(filePath, content):  
-  with open(filePath, "w") as file:
-      file.write(content)
-
-
-""" Check the content of a file 
-    Args:
-        filePath: the path of the file to check
-        expectedContent: the expected content as a regex or a list of regex
-        unexpectedContent: the content that should not be in the file
-        partial: if True, the expected content is a part of the file content
-"""
-def checkFileContent(filePath, expectedContent, unexpectedContent=None):
-  logging.info("Checking file content %s for file %s", expectedContent, os.path.abspath(filePath))
-  with open(filePath, "r") as file:
-      content = file.read()
-      logging.debug("File content: %s", content)
-      if isinstance(expectedContent, list):
-        for expected in expectedContent:
-          assert re.search(expected, content,re.MULTILINE), "File content does not contain the expected content: %s" % expected
-      else:
-        assert re.search(expectedContent, content,re.MULTILINE), "File content does not contain the expected content: %s" % expectedContent
-
-      if unexpectedContent:
-        if isinstance(unexpectedContent, list):
-          for unexpected in unexpectedContent:
-            assert not re.search(unexpected, content,re.MULTILINE), "File content should not contain: '%s'" % unexpected
-        else:
-          assert not re.search(unexpectedContent, content,re.MULTILINE), "File content should not contain: '%s'" % unexpectedContent
-
-
-""" Display the content of a file """
-def cat(filePath: string):
-  with open(filePath, "r", encoding="utf-8") as file:
-      content = file.read()
-      logging.info("Content of %s (len=%d):", os.path.abspath(filePath), len(content))
-      logging.debug("Raw content: %s", repr(content))
-      printIndent(GREEN+content+RESET_ALL)
-      print("")
-
-
-def catFilePath(filePath: Path):
-  cat(str(filePath))  
-
-
-""" Get the sample configuration """
-def getSampleConfig(file: string):
-  with open(os.path.dirname(file)+"/../_doc/ostrich.yaml", "r") as file:
-    return file.read()
-
-
-""" Get the path to the sample applications (for integration test) """
-def getSampleAppPath(file: string):
-  return os.path.normpath(os.path.dirname(file)+"/../_samples")
-
-
-""" Get the template configuration """
-def getTemplateConfig(file: string):
-  with open(os.path.dirname(file)+"/../config.yaml", "r") as file:
-    return yaml.safe_load(file.read())
-
-
-""" Execute a helm template on a specific file 
-    Returns the parsed YAML content as a dictionary
-    Args:
-        folder: the folder where the helm chart is located
-        file: the file to template
-        namespace: the namespace to set
-        values: the values to pass to the helm template as ["key1=value1", "key2=value2"]
-        valueFiles: the value files to pass to the helm template as ["file1.yaml", "file2.yaml"]
-        helmOptions: the additional options to pass to the helm template as ["--set","key1=value1"]
-        aslist: if True, the result is a list of dictionaries.
-                If False, the result is a single dictionary. Function will fail if the result is not a single YAML document
-        display: if True, the output is displayed 
-"""
-def helmTemplate(folder: string, file: string="", namespace: string="", values=[], valueFiles=[], helmOptions=[], aslist=False,check=True,display=True) -> any :
-  result: string = helmTemplateAsString(folder, file, namespace, values, valueFiles, helmOptions, check, display)
-  reslist=list(yaml.safe_load_all(result))
-
-  logging.info("Found %s objects", len(reslist))
-
-  if(aslist):
-    return reslist
-  else:
-    if(len(reslist)==1):
-      return reslist[0]
-    else:
-      assert False, "The result is not a single YAML document"
-
-
-""" Execute a helm template on a specific file 
-    Returns the parsed YAML content as a raw string
-    Args:
-        folder: the folder where the helm chart is located
-        file: the file to template
-        namespace: the namespace to set
-        values: the values to pass to the helm template as ["key1=value1", "key2=value2"]
-        valueFiles: the value files to pass to the helm template as ["file1.yaml", "file2.yaml"]
-        helmOptions: the additional options to pass to the helm template as ["--set","key1=value1"]
-        display: if True, the output is displayed 
-"""
-def helmTemplateAsString(folder: string, file: string="", namespace: string="", values=[], valueFiles=[], helmOptions=[],check=True, display=True) -> string :
-
-  if(len(file)==0):
-    logging.info("Helm template folder %s", folder)
-    tabParams=["helm", "template"]
-  else:
-    logging.info("Helm template folder %s for file %s", folder, file)
-    tabParams=["helm", "template", "-s", file]
-
-  tabParams.extend(helmOptions)
-
-  for value in values:
-    tabParams.append("--set")
-    tabParams.append(value)
-
-  for valueFile in valueFiles:
-    tabParams.append("-f")
-    tabParams.append(valueFile)
-
-  if len(namespace) > 0:
-    tabParams.append("--namespace")
-    tabParams.append(namespace)
-    tabParams.append("--set")
-    tabParams.append("global.namespace="+namespace)
-
-  tabParams.append(folder)
-  logging.info("Executing command %s", " ".join(tabParams))
-  result=""
-  
-  p = subprocess.Popen(
-      tabParams, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-  )
-
-  if os.name == 'nt':
-    out, err = p.communicate()
-    if display:
-      if out:
-        printIndent(out.decode(errors='replace'))
-      if err:
-        printIndent(RED + err.decode(errors='replace') + YELLOW)
-    result = out.decode(errors='replace')
-    if display:
-      print(RESET_ALL,flush=True)
-  else:
-    sel = selectors.DefaultSelector()
-    sel.register(p.stdout, selectors.EVENT_READ)
-    sel.register(p.stderr, selectors.EVENT_READ)
-
-    toRead=True
-
-    if display:
-      print(YELLOW,flush=True)
-    while toRead:
-      for key, _ in sel.select():
-        data = key.fileobj.read1().decode()
-        if not data:
-            toRead=False
-        else:
-          if key.fileobj is p.stdout:
-              if display:
-                printIndent(data)
-              result += data
-          else:
-              if display:
-                printIndent(RED+data+YELLOW)
-
-    if display:
-      print(RESET_ALL,flush=True)
-
-
-    p.wait()
-  if check:
-    assert p.returncode == 0, "Helm template command failed"
-
-  return result
-
-
-""" 
-Check the content of a dictionary
-Args:
-  data: the dictionary to check
-  expr: the expression to check as a JSON path
-  expected: the expected value
-  regex: if True, the expected value is a regex
-"""
-def checkEntry(data: dict, expr: string, expected: string, regex: bool = False):
-  logging.info('Checking that expression "%s" %s "%s"', expr, ("~" if regex else "="), expected)
-
-  jsonpath_expr = parse(expr)
-  results = [match.value for match in jsonpath_expr.find(data)]
-
-  assert len(results) > 0, f"Expression {expr} returns no result"
-
-  logging.info("Found %s match%s", len(results), "es" if len(results) > 1 else "")
-  logging.info("Results: %s", results)
-
-  found=False
-  for result in results:
-    if(regex):
-      if(re.match(expected, str(result))):
-        found=True
-        break
-    else:
-      if str(result) == expected:
-        found=True
-        break
-
-  assert found, f"Expression {expr} does not match. Expected: {expected} but was {results}"
-
-
-""" 
-Get the content of a dictionary
-Args:
-  data: the dictionary to check
-  expr: the expression to check as a JSON path
-"""
-def getEntry(data: dict, expr: string):
-  jsonpath_expr = parse(expr)
-  ret=[match.value for match in jsonpath_expr.find(data)]
-
-  assert len(ret) <= 1, f"Expression {expr} returns multiple entries. Expected 1 but was {len(ret)}. Use getEntries instead"
-  if(len(ret)==0):
-    return None
-
-  return [match.value for match in jsonpath_expr.find(data)][0]
-
-
-""" 
-Get the content of a dictionary
-Args:
-  data: the dictionary to check
-  expr: the expression to check as a JSON path
-"""
-def getEntries(data: dict, expr: string):
-  jsonpath_expr = parse(expr)
-  ret=[match.value for match in jsonpath_expr.find(data)]
-  return [match.value for match in jsonpath_expr.find(data)]
-
-
-""" 
-Loads a JSON file and returns the content as a dictionary
-"""
-def loadJson(filePath: string):
-  with open(filePath, "r") as file:
-    return json.load(file)
-
-""" 
-Loads a YAML file and returns the content as a dictionary
-"""
-def loadYaml(filePath: string):
-  with open(filePath, "r") as file:
-    return yaml.safe_load(file)
-
-""" 
-Parse a YAML string and returns the content as a dictionary
-"""
-def parseYaml(content: string):
-  return yaml.safe_load(content)
-
-"""
-Parse a YAML string with multiple documents and returns the content as a list of dictionaries
-"""
-def parseYamlMultiDoc(content: string) -> dict :
-  l=list(yaml.safe_load_all(content))
-  ret: dict={}
-
-  for i in range(len(l)):
-    if l[i] and l[i]['metadata'] and l[i]['metadata']['name']:
-      assert "kind" in l[i], f"kind not found in document {i}"
-      name=l[i]['metadata']['name']
-      kind=l[i]['kind']
-      ret[name]=l[i]
-      assert kind+"/"+name not in ret, f"Duplicate key {kind}/{name}"
-      ret[kind+"/"+name]=l[i]
-  return ret
-
-"""
-Get an environment variable
-Args:
-    name: the name of the environment variable
-    default: the default value if the environment variable is not set
-"""
-def getenv(name: string, default: string = None):
-  ret=os.getenv(name)
-  if(ret==None and default==None):
-    assert False, f"Environment variable {name} is not set"
-  
-  if(ret==None):
-    return default
-  else:
-    return ret
-
-
-"""
-Execute a HTTP GET request
-Args:
-    url: the URL to request
-    expectedReturnCode: the expected return code
-"""
-def httpGet(url: string, expectedReturnCode: int = None, showOutput=False, retries=0):
-
-  logging.info(f"Executing HTTP GET request to {url} with {retries} retries")
-  attempts=retries+1
-  success: bool=False
-
-  for i in range(attempts):
-    response = requests.get(url,verify=False)
-    if showOutput:
-      print(GREY,flush=True)  
-      logging.info(f"Response from {url}: {response.text}")
-      print(RESET_ALL,flush=True)  
-
-    logging.info("Response code: %d", response.status_code)
-
-    if expectedReturnCode == None:
-       break
-    else:
-      if response.status_code == expectedReturnCode:
-        success=True
-        break
-      else:
-        logging.error(f"Expected status code {expectedReturnCode} but got {response.status_code}, retrying ({i})...")
-        time.sleep(1)
-
-  assert success, f"Expected status code {expectedReturnCode} but got {response.status_code} after {attempts} attempts"
-
-
-"""
-Deletes a namespace and wait for the deletion to be effective
-"""
-def deleteNs(namespace: string):
-    # Load kube config
+def wipe_kubernetes_namespace(name):
+    """Triggers and waits for k8s namespace deletion."""
     config.load_kube_config()
-
-    # Create a Kubernetes API client
-    v1 = client.CoreV1Api()
-
-    # Delete the namespace
+    api = client.CoreV1Api()
     try:
-        v1.delete_namespace(namespace,async_req=False)
-        logging.info(f"Namespace {namespace} deleted successfully.")
-    except client.exceptions.ApiException as e:
-        logging.error(f"Failed to delete namespace {namespace}: {e}")
+        api.delete_namespace(name)
+        logging.info("Namespace '%s' removal initiated", name)
+    except Exception as e:
+        logging.error("Namespace cleanup failed: %s", e)
 
-    # Wait for the namespace to be actually deleted
-    logging.info(f"Waiting for namespace {namespace} to be deleted...")
+    logging.info("Polling for deletion of '%s'...", name)
     while True:
         try:
-            v1.read_namespace(namespace)
+            api.read_namespace(name)
             print(".", end="", flush=True)
             time.sleep(2)
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                print("\n", end="", flush=True)
-                logging.info(f"Namespace {namespace} deleted successfully.")
+                print(" Done.")
                 break
-            else:
-                logging.error(f"Error while waiting for namespace {namespace} to be deleted: {e}")
-                raise
+            raise
 
-
-"""
-Gets a secret
-"""
-def getSecret(namespace: string, name: string) -> client.V1Secret:
-    # Load kube config
+def retrieve_k8s_secret(namespace, name):
     config.load_kube_config()
+    return client.CoreV1Api().read_namespaced_secret(name, namespace)
 
-    # Create a Kubernetes API client
-    v1 = client.CoreV1Api()
-
-    try:
-      secret = v1.read_namespaced_secret(name, namespace)
-      logging.info(f"Secret {name} retrieved successfully.")
-      return secret
-    except client.exceptions.ApiException as e:
-      logging.error(f"Failed to get secret {name} in namespace {namespace}: {e}")
-      raise
-
+# Backwards compatibility layer
+getSDKPath = resolve_sdk_resource_path
+printIndent = output_indented_lines
+display = lambda: print("SDK Helper Active")
+updateYamlDict = modify_yaml_dictionary
+updateYaml = transform_yaml_string
+updateYamlFile = patch_yaml_file
+checkContentRegex = verify_regex_match
+run = spawn_monitored_process
+ost = execute_ost_command
+extractHelmTemplateFromDryRun = digest_helm_output
+createEnv = scaffold_test_dir
+sampleEnv = switch_to_sample
+createFile = write_test_file
+checkFileContent = audit_file_content
+cat = stream_file
+catFilePath = lambda p: stream_file(str(p))
+getSampleConfig = fetch_doc_sample
+getSampleAppPath = resolve_sample_base
+getTemplateConfig = fetch_template_node_config
+helmTemplate = run_helm_render
+checkEntry = validate_jsonpath
+getEntry = lambda b, q: (parse(q).find(b)[0].value if parse(q).find(b) else None)
+getEntries = lambda b, q: [m.value for m in parse(q).find(b)]
+loadJson = lambda p: json.load(open(p))
+loadYaml = lambda p: yaml.safe_load(open(p))
+parseYaml = yaml.safe_load
+parseYamlMultiDoc = parse_yamls_to_map
+getenv = fetch_env_checked
+httpGet = perform_http_get
+deleteNs = wipe_kubernetes_namespace
+getSecret = retrieve_k8s_secret

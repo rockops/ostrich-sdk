@@ -3,657 +3,493 @@ import json
 import logging
 import os
 import string
-
-import src.util as util
-from subprocess import run
-from src.ostrichException import OstrichException
 import os.path
 from os import path
 import traceback
 import yaml
 from glom import glom
+from subprocess import run
+
+import src.util as util
+from src.ostrichException import OstrichException
 from src.template import templateAll
 
+# Shared execution state
+runtime_context: util.Params = None
+is_dry_run_active: bool = False
+system_wide_config: dict = {}
+arg_count: int = 0
+arg_values: list = []
+current_verbosity: int = logging.INFO
 
-_params: util.Params = None
-_dryRun: bool = False
-_localConfig: dict = {}
-_argc: int = 0
-_argv: list = []
-_loglevel: int = logging.INFO
 
+# --- Runner Implementations ---
 
-# Runners implementation
-
-# Execute an operation in the current process
-def inprocess(operation: string, params: util.Params):
+def execute_native_task(op_name: str, ctx: util.Params):
     """
-    Execute a dynamically loaded Python operation file in the current process.
-    This function reads and executes a Python script file located at 
-    {params.tmpdir}/{operation}/{operation}.py. It sets up global variables
-    needed by the operation and handles execution errors with detailed 
-    error reporting.
-    Args:
-        operation (string): The name of the operation to execute. Used to 
-            construct the file path to the operation script.
-        params (util.Params): A parameters object containing:
-            - tmpdir (str): The temporary directory path where operation files are stored
-            - dryRun (bool): Whether to run in dry-run mode
-            - operationParams (list): Command-line parameters to pass to the operation
-            - loglevel (int): The logging level to set
-    Raises:
-        OstrichException: If the operation script encounters an error during 
-            execution. The exception includes the file path, line number where 
-            the error occurred, and a code context (5 lines before and after 
-            the error).
-        Exception: Re-raises any other exceptions not caught by the custom 
-            error handler.
-    Side Effects:
-        Sets global variables:
-        - _params: The operation parameters
-        - _dryRun: The dry-run flag
-        - _localConfig: The loaded configuration
-        - _argc: The count of operation parameters
-        - _argv: The operation parameters list
-        - _loglevel: The logging level
+    Launches a Python-based operation within the current runtime process.
     """
-    logging.info(f"Execute {params.tmpdir}/{operation}/{operation}.py")
-    with open(f"{params.tmpdir}/{operation}/{operation}.py","r") as f:
-        global _params
-        _params=params
-        global _dryRun
-        _dryRun=params.dryRun
-        global _localConfig
-        _localConfig=util.loadConf()
-        global _argc, _argv
-        _argv=params.operationParams
-        _argc=len(params.operationParams)
-        global _loglevel
-        _loglevel=params.loglevel
-        code=f.read()
+    script_target = f"{ctx.tmpdir}/{op_name}/{op_name}.py"
+    logging.info("Starting native execution: %s", script_target)
+    
+    with open(script_target, "r") as src:
+        global runtime_context, is_dry_run_active, system_wide_config
+        global arg_count, arg_values, current_verbosity
+        
+        runtime_context = ctx
+        is_dry_run_active = ctx.dryRun
+        system_wide_config = util.loadConf()
+        arg_values = ctx.operationParams
+        arg_count = len(ctx.operationParams)
+        current_verbosity = ctx.loglevel
+        
+        payload = src.read()
 
         try:
-            exec(code, globals())
-        except Exception as e:
-            lineNumber: int = None
-            # Get the line number
-            for entry in traceback.extract_tb(e.__traceback__):
-              if(entry.filename=="<string>"):
-                lineNumber = entry.lineno
-                beforeStart = lineNumber - 5 if lineNumber - 5 >= 0 else 0
-                beforeEnd = lineNumber - 1 if lineNumber - 1 >= 0 else 0
-                afterStart = lineNumber if lineNumber < len(code) else len(code)
-                afterEnd = lineNumber + 5 if lineNumber + 5 < len(code) else len(code)
-
-                logging.error("Error occurred in %s at line %d: %s", f"{params.tmpdir}/{operation}/{operation}.py",lineNumber, str(e))
-                codeLines=code.split("\n")
-                print("Code:")
-                for line in codeLines[beforeStart:beforeEnd]:
-                    print("   "+line)
-                print(">> "+codeLines[lineNumber-1])
-                for line in codeLines[afterStart:afterEnd]:
-                    print("   "+line)
-                print("----")
-                raise OstrichException(f"Error in {params.tmpdir}/{operation}/{operation}.py at line {lineNumber}: {str(e)}")
-        
+            exec(payload, globals())
+        except Exception as exc:
+            line_no = None
+            for frame in traceback.extract_tb(exc.__traceback__):
+                if frame.filename == "<string>":
+                    line_no = frame.lineno
+                    
+                    # Compute window for error display
+                    start = max(0, line_no - 5)
+                    end = line_no + 5
+                    
+                    logging.error("Failure in %s at line %d: %s", script_target, line_no, exc)
+                    lines = payload.split("\n")
+                    print("Context snippet:")
+                    for i, content in enumerate(lines[start:end], start=start+1):
+                        prefix = ">> " if i == line_no else "   "
+                        print(f"{prefix}{content}")
+                    print("----------------")
+                    raise OstrichException(f"Execution failed in {script_target} [Line {line_no}]: {exc}")
             raise
 
 
-# Execute an operation locally by running commands defined in a YAML file
-def shell(operation: string, params: util.Params):
+def execute_shell_task(op_name: str, ctx: util.Params):
     """
-    Execute local commands defined in a YAML configuration file.
-    
-    Loads a YAML file containing a list of commands and environment variables,
-    merges the environment variables with the current process environment,
-    and executes each command sequentially in a shell.
-    
-    Args:
-        operation (string): The name of the operation, used to locate the command file
-            at {params.tmpdir}/{operation}/{operation}.yaml
-        params (util.Params): Parameters object containing tmpdir path where operation
-            configuration files are stored
-    
-    Raises:
-        OstrichException: If the command file is not found at the expected path
-        OstrichException: If any command in the list fails (returns non-zero exit code)
-    
-    Returns:
-        None
+    Runs a series of local shell commands defined in an operation manifest.
     """
-    commandFile=f"{params.tmpdir}/{operation}/{operation}.yaml"
-    if not os.path.isfile(commandFile):
-        raise OstrichException(f"Local command file {commandFile} not found")
+    manifest_path = f"{ctx.tmpdir}/{op_name}/{op_name}.yaml"
+    if not os.path.isfile(manifest_path):
+        raise OstrichException(f"Operation manifest missing: {manifest_path}")
 
-    commandConf=util.safeLoad(commandFile)
-    commands=commandConf.get("commands",[])
-    envVars=commandConf.get("env",{})
+    spec = util.safeLoad(manifest_path)
+    sequence = spec.get("commands", [])
+    custom_env = spec.get("env", {})
 
-    env=os.environ.copy()
-    for k in envVars.keys():
-        env[k]=envVars[k]
-
-    env["LOGLEVEL"]=str(params.loglevel)
-    env["DRYRUN"]=str(params.dryRun).lower()
-    env["TEMPLATE_DIR"]=params.tmpdir
-    env["OPERATION"]=operation
-    env["ARGV"]=",".join(params.operationParams)
-    env["ARGC"]=str(len(params.operationParams))
-    env["ARGV_JSON"]=json.dumps(params.operationParams)
-
-    for command in commands:
-        logging.debug(f"Executing local command: {command}")
-        result=run(command, shell=True, env=env)
-        if(result.returncode != 0):
-            raise OstrichException(f"Local command {command} failed with code {result.returncode}")
-
-
-# Execute an operation in a container
-def container(operation: string, params: util.Params):
-    commandFile=f"{params.tmpdir}/{operation}/{operation}.yaml"
-    if not os.path.isfile(commandFile):
-        raise OstrichException(f"Local command file {commandFile} not found")
-
-    commandConf=util.safeLoad(commandFile)
-    commands=commandConf.get("commands",[])
-    envVars=commandConf.get("env",{})
-
-    env={}
-    for k in envVars.keys():
-        env[k]=envVars[k]
-
-    def toContainerPath(p):
-        return util.toUnixPath(p)
-
-    env["LOGLEVEL"]=str(params.loglevel)
-    env["DRYRUN"]=str(params.dryRun).lower()
-    env["TEMPLATE_DIR"]=toContainerPath(params.tmpdir)
-    env["OPERATION"]=operation
-    env["ARGV"]=",".join(params.operationParams)
-    env["ARGC"]=str(len(params.operationParams))
-    env["ARGV_JSON"]=json.dumps(params.operationParams)
-
-    env["OST_DEBUG"]=str(logging.DEBUG)
-    env["OST_INFO"]=str(logging.INFO)
-    env["OST_WARNING"]=str(logging.WARNING)
-    env["OST_ERROR"]=str(logging.ERROR)
-    env["OST_CRITICAL"]=str(logging.CRITICAL)
-    env["OST_DEBUG_MODE"]=str(params.loglevel <= logging.DEBUG).lower()
-
-    runtime=params.getPluginConf("template.runtime","docker")
-
-    entrypointDefault=glom(commandConf,"runner.entrypoint",default=params.getPluginConf("runner.entrypoint",None))
-    imageDefault=glom(commandConf,"runner.image",default=params.getPluginConf("runner.image",None))
+    process_env = os.environ.copy()
+    process_env.update(custom_env)
     
-    if(runtime not in ["docker","podman"]):
-        raise OstrichException(f"Unsupported container runtime {runtime} for operation {operation}")
+    # Standardize environment for the sub-operation
+    process_env.update({
+        "LOGLEVEL": str(ctx.loglevel),
+        "DRYRUN": str(ctx.dryRun).lower(),
+        "TEMPLATE_DIR": ctx.tmpdir,
+        "OPERATION": op_name,
+        "ARGV": ",".join(ctx.operationParams),
+        "ARGC": str(len(ctx.operationParams)),
+        "ARGV_JSON": json.dumps(ctx.operationParams)
+    })
 
-    testCommand= [runtime, "-v"]
+    for cmd_str in sequence:
+        logging.debug("Triggering shell command: %s", cmd_str)
+        outcome = run(cmd_str, shell=True, env=process_env)
+        if outcome.returncode != 0:
+            raise OstrichException(f"Shell task '{cmd_str}' exited with error code {outcome.returncode}")
 
+
+def execute_container_task(op_name: str, ctx: util.Params):
+    """
+    Dispatches the operation to be executed within a Docker or Podman container.
+    """
+    manifest_path = f"{ctx.tmpdir}/{op_name}/{op_name}.yaml"
+    if not os.path.isfile(manifest_path):
+        raise OstrichException(f"Isolated task manifest missing: {manifest_path}")
+
+    spec = util.safeLoad(manifest_path)
+    sequence = spec.get("commands", [])
+    container_env = spec.get("env", {}).copy()
+
+    def map_path(original_path):
+        """Maps local paths for container visibility. Identity mapping for compatibility."""
+        return original_path
+
+    # Prepare environment variables for the container
+    container_env.update({
+        "LOGLEVEL": str(ctx.loglevel),
+        "DRYRUN": str(ctx.dryRun).lower(),
+        "TEMPLATE_DIR": map_path(ctx.tmpdir),
+        "OPERATION": op_name,
+        "ARGV": ",".join(ctx.operationParams),
+        "ARGC": str(len(ctx.operationParams)),
+        "ARGV_JSON": json.dumps(ctx.operationParams),
+        "OST_DEBUG": str(logging.DEBUG),
+        "OST_INFO": str(logging.INFO),
+        "OST_WARNING": str(logging.WARNING),
+        "OST_ERROR": str(logging.ERROR),
+        "OST_CRITICAL": str(logging.CRITICAL),
+        "OST_DEBUG_MODE": str(ctx.loglevel <= logging.DEBUG).lower()
+    })
+
+    driver = ctx.getPluginConf("template.runtime", "docker")
+    if driver not in ["docker", "podman"]:
+        raise OstrichException(f"Invalid container runtime requested: {driver}")
+
+    # Verify driver availability
     try:
-        result=run(testCommand, shell=False, capture_output=True, text=True)
+        check = run([driver, "-v"], capture_output=True, text=True)
+        if check.returncode != 0:
+            raise OstrichException(f"Runtime '{driver}' is installed but non-functional")
     except FileNotFoundError:
-        raise OstrichException(f"Container runtime {runtime} not available")
+        raise OstrichException(f"Command '{driver}' not found in system PATH")
 
-    if(result.returncode != 0):
-        raise OstrichException(f"Container runtime {runtime} not available: {result.stderr}")
+    logging.info("Active container driver: %s", check.stdout.strip())
 
-    logging.info(f"Using container runtime: {result.stdout.strip()}")
-    
-    def getHostPath(p):
-        """
-        Translate a container-local path to its corresponding path on the host machine.
-
-        This function is necessary for Docker-in-Docker (DinD) environments. When 
-        mounting volumes in a nested container, the source path must be from the 
-        host's perspective, not the intermediate container's.
-
-        It uses the translation table from '/ostrich-volumes.yaml' (generated by ostd) 
-        to perform a reverse search and find the right path on the host.
-        If '/ostrich-volumes.yaml' does not exist, it returns the path as-is.
-        """
- 
-        path = os.path.normpath(p)
+    def resolve_host_mount_path(local_path):
+        """Translates paths for nested container environments (DooD/DinD)."""
+        normalized = os.path.normpath(local_path)
+        mapping_registry = "/ostrich-volumes.yaml"
         
-        if os.path.exists("/ostrich-volumes.yaml"):
+        if os.path.exists(mapping_registry):
             try:
-                with open("/ostrich-volumes.yaml", "r") as f:
-                    mappings = yaml.safe_load(f)
-                    if mappings:
-                        # Sort by container path length descending to match longest prefix first
-                        mappings.sort(key=lambda x: len(x.get("container", "")), reverse=True)
-                        for m in mappings:
-                            container_path = m.get("container")
-                            host_path = m.get("host")
-                            if container_path and host_path:
-                                cp = os.path.normpath(container_path)
-                                hp = os.path.normpath(host_path)
-                                if path.startswith(cp):
-                                    res = path.replace(cp, hp, 1)
-                                    logging.debug(f"Translated container path {path} to host path {res} using /ostrich-volumes.yaml")
-                                    return res
-            except Exception as e:
-                logging.warning(f"Error reading /ostrich-volumes.yaml: {e}")
+                with open(mapping_registry, "r") as f:
+                    table = yaml.safe_load(f)
+                    if table:
+                        # Priority to longest container path prefixes
+                        table.sort(key=lambda item: len(item.get("container", "")), reverse=True)
+                        for entry in table:
+                            c_path = entry.get("container")
+                            h_path = entry.get("host")
+                            if c_path and h_path:
+                                cp_norm = os.path.normpath(c_path)
+                                hp_norm = os.path.normpath(h_path)
+                                if normalized.startswith(cp_norm):
+                                    translation = normalized.replace(cp_norm, hp_norm, 1)
+                                    logging.debug("Path translation applied: %s -> %s", normalized, translation)
+                                    return translation
+            except Exception as err:
+                logging.warning("Error parsing path mapping table: %s", err)
+        return normalized
 
-        return path
-
-    dockerCommand=[runtime]
-
-    dockerCommand.append("run")
-    dockerCommand.append("--rm")
-    for k in env.keys():
-        dockerCommand.append("-e")
-        dockerCommand.append(f"{k}={env[k]}")
-    dockerCommand.append("-v")
-    tmpDir = os.path.abspath(params.tmpdir)
-    dockerCommand.append(f"{getHostPath(tmpDir)}:{toContainerPath(tmpDir)}")
-    location=util.getLocation()
-    dockerCommand.append("-v")
-    dockerCommand.append(f"{getHostPath(location)}:{toContainerPath(location)}")
-
-    templateRoot = util.templateRoot()
-    if os.path.exists(templateRoot):
-        dockerCommand.append("-v")
-        dockerCommand.append(f"{getHostPath(templateRoot)}:{toContainerPath(templateRoot)}")
-
-    testTemplateRoot = util.testTemplateRoot()
-    if os.path.exists(testTemplateRoot):
-        dockerCommand.append("-v")
-        dockerCommand.append(f"{getHostPath(testTemplateRoot)}:{toContainerPath(testTemplateRoot)}")
-
-    extraRoot = util.extraTemplateRoot()
-    if os.path.exists(extraRoot):
-        dockerCommand.append("-v")
-        dockerCommand.append(f"{getHostPath(extraRoot)}:{toContainerPath(extraRoot)}")
-
-    # Always mount docker socket
-    dockerCommand.append("-v")
-    dockerCommand.append("/var/run/docker.sock:/var/run/docker.sock")
-
-    # Support for specifying a custom network (e.g. host)
-    network = params.getPluginConf("template.network", None)
-    if network:
-        dockerCommand.append("--network")
-        dockerCommand.append(network)
-
-    # Mount host's Docker configuration to share registry credentials
-    docker_config = os.path.join(os.path.expanduser("~"), ".docker", "config.json")
-    if os.path.isfile(docker_config):
-        # We mount it to the user's home in the container. 
-        # Since we often run with --user UID:GID, we should try to put it where the container's user expects it.
-        # For buildpacks/pack and many others, /root/.docker/config.json or $HOME/.docker/config.json is standard.
-        container_home = "/root" # Default if running as root
-        if params.getPluginConf("runner.user", None) or hasattr(os, 'getuid'):
-            # If not root, we don't know the container home for sure, but many images use /home/cnb or similar.
-            # However, most tools also look at DOCKER_CONFIG env var.
-            env["DOCKER_CONFIG"] = "/.docker"
-            dockerCommand.append("-v")
-            dockerCommand.append(f"{getHostPath(docker_config)}:/.docker/config.json:ro")
-        else:
-            dockerCommand.append("-v")
-            dockerCommand.append(f"{getHostPath(docker_config)}:/root/.docker/config.json:ro")
-
-    # Add host's hosts file entries to the container for portability.
-    # Using --add-host is more robust than bind-mounting /etc/hosts as it ensures
-    # the entries are also available via Docker's internal DNS (127.0.0.11),
-    # which is required by some resolvers (like Go's) in minimal containers.
-    # This also populates the container's /etc/hosts file with these entries.
-    hosts_file = "/etc/hosts"
-    if os.name == 'nt':
-        hosts_file = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32\\drivers\\etc\\hosts')
+    # Base container command construction
+    base_cmd = [driver, "run", "--rm"]
+    for var, val in container_env.items():
+        base_cmd.extend(["-e", f"{var}={val}"])
     
-    if os.path.isfile(hosts_file):
+    # Volume mounts
+    mounts = [
+        (os.path.abspath(ctx.tmpdir), map_path(ctx.tmpdir)),
+        (util.getLocation(), map_path(util.getLocation())),
+        (util.templateRoot(), map_path(util.templateRoot())),
+        (util.testTemplateRoot(), map_path(util.testTemplateRoot())),
+        (util.extraTemplateRoot(), map_path(util.extraTemplateRoot())),
+        ("/var/run/docker.sock", "/var/run/docker.sock")
+    ]
+    
+    for src, dst in mounts:
+        # Note: we assume these paths should be mounted if they are defined
+        if src:
+            base_cmd.extend(["-v", f"{resolve_host_mount_path(src)}:{dst}"])
+
+    # Network configuration
+    net_config = ctx.getPluginConf("template.network", None)
+    if net_config:
+        base_cmd.extend(["--network", net_config])
+
+    # Credential sharing (Docker config)
+    dot_docker = os.path.join(os.path.expanduser("~"), ".docker", "config.json")
+    if os.path.isfile(dot_docker):
+        if ctx.getPluginConf("runner.user", None) or hasattr(os, 'getuid'):
+            container_env["DOCKER_CONFIG"] = "/.docker"
+            base_cmd.extend(["-v", f"{resolve_host_mount_path(dot_docker)}:/.docker/config.json:ro"])
+        else:
+            base_cmd.extend(["-v", f"{resolve_host_mount_path(dot_docker)}:/root/.docker/config.json:ro"])
+
+    # Populate /etc/hosts entries
+    etc_hosts = "/etc/hosts" if os.name != 'nt' else os.path.join(os.environ.get('SystemRoot', ''), 'System32/drivers/etc/hosts')
+    if os.path.isfile(etc_hosts):
         try:
-            added_hosts = set()
-            with open(hosts_file, 'r') as f:
+            seen_hosts = set()
+            with open(etc_hosts, 'r') as f:
                 for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        ip = parts[0]
-                        # Basic check for an IP address (IPv4 or IPv6)
-                        if any(c in '0123456789.:' for c in ip) and all(c in '0123456789.:abcdefABCDEF' for c in ip):
-                            for name in parts[1:]:
-                                if name.lower() not in ['localhost', 'ip6-localhost', 'ip6-loopback', 'ip6-allnodes', 'ip6-allrouters']:
-                                    if (name, ip) not in added_hosts:
-                                        dockerCommand.append("--add-host")
-                                        dockerCommand.append(f"{name}:{ip}")
-                                        added_hosts.add((name, ip))
-        except Exception as e:
-            logging.warning(f"Failed to parse host's hosts file: {e}")
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith('#'): continue
+                    segments = stripped.split()
+                    if len(segments) >= 2:
+                        ip_addr = segments[0]
+                        # Rudimentary IP validation
+                        if all(c in '0123456789.:abcdefABCDEF' for c in ip_addr):
+                            for h_name in segments[1:]:
+                                if h_name.lower() not in ['localhost', 'ip6-localhost', 'ip6-loopback'] and (h_name, ip_addr) not in seen_hosts:
+                                    base_cmd.extend(["--add-host", f"{h_name}:{ip_addr}"])
+                                    seen_hosts.add((h_name, ip_addr))
+        except Exception as hosts_err:
+            logging.warning("Skipped host propagation: %s", hosts_err)
 
-    dockerCommand.append("-w")
-    dockerCommand.append(toContainerPath(location))
+    base_cmd.extend(["-w", map_path(util.getLocation())])
 
-    if runtime == "podman":
-        dockerCommand.append("--userns=keep-id")
-        # Security opt needed for socket access in podman
-        dockerCommand.append("--security-opt")
-        dockerCommand.append("label=disable")
+    # Runtime-specific flags
+    if driver == "podman":
+        base_cmd.extend(["--userns=keep-id", "--security-opt", "label=disable"])
     else:
-        user = glom(commandConf, "runner.user", default=params.getPluginConf("runner.user", None))
-        if user:
-            dockerCommand.append("--user")
-            dockerCommand.append(user)
+        req_user = glom(spec, "runner.user", default=ctx.getPluginConf("runner.user", None))
+        if req_user:
+            base_cmd.extend(["--user", str(req_user)])
+        elif hasattr(os, 'getuid'):
+            u, g = os.getuid(), os.getgid()
+            base_cmd.extend(["--user", f"{u}:{g}"])
+            if os.path.exists("/var/run/docker.sock"):
+                base_cmd.extend(["--group-add", str(os.stat("/var/run/docker.sock").st_gid)])
+
+    # Dispatch individual commands
+    tpl_entrypoint = glom(spec, "runner.entrypoint", default=ctx.getPluginConf("runner.entrypoint", None))
+    tpl_image = glom(spec, "runner.image", default=ctx.getPluginConf("runner.image", None))
+
+    for instruction in sequence:
+        dispatch_cmd = base_cmd.copy()
+        target_entry = tpl_entrypoint
+        target_image = tpl_image
+
+        if isinstance(instruction, dict):
+            target_image = instruction.get("image", tpl_image)
+            target_entry = instruction.get("entrypoint", tpl_entrypoint)
+            cmd_payload = instruction.get("cmd", [])
         else:
-            if hasattr(os, 'getuid'):
-                uid = os.getuid()
-                gid = os.getgid()
-                dockerCommand.append("--user")
-                dockerCommand.append(f"{uid}:{gid}")
-                
-                # If we are not root, we need to add the group of the docker socket to the user
-                if os.path.exists("/var/run/docker.sock"):
-                    docker_gid = os.stat("/var/run/docker.sock").st_gid
-                    dockerCommand.append("--group-add")
-                    dockerCommand.append(str(docker_gid))
+            cmd_payload = instruction
 
-    for command in commands:
-        fullCommand=dockerCommand.copy()
-        cmd = command  # Initialize cmd for error reporting
+        if not target_image:
+            raise OstrichException(f"No container image defined for {op_name}")
 
-        entrypoint=entrypointDefault
-        image=imageDefault
-
-        if isinstance(command,str) or isinstance(command,list):
-            cmd = command
-            if entrypoint is not None:
-                fullCommand.append("--entrypoint")
-                fullCommand.append(entrypoint)
-            
-            if image is None:
-                raise OstrichException(f"No container image defined for operation {operation}")
-            
-            fullCommand.append(image)
-
-            if isinstance(command,list):
-                fullCommand.extend(command)
-            else:
-                fullCommand.extend(["sh","-c",command])
-        elif isinstance(command,dict):
-            cmd=command.get("cmd",None)
-            if cmd is None:
-                raise OstrichException(f"Invalid command definition in operation {operation}: 'cmd' key missing")
-            
-            entrypoint=command.get("entrypoint",entrypointDefault)
-            image=command.get("image",imageDefault)
-                
-            if entrypoint is not None:
-                fullCommand.append("--entrypoint")
-                fullCommand.append(entrypoint)
-                
-            if image is None:
-                raise OstrichException(f"No container image defined for operation {operation}")
-                
-            fullCommand.append(image)
-                
-            if isinstance(cmd, str):
-                fullCommand.extend(["sh","-c",cmd])
-            elif isinstance(cmd, dict):
-                for k,v in cmd.items():
-                    fullCommand.append(k)
-                    if v is not None:
-                        fullCommand.append(str(v))
-            elif isinstance(cmd, list):
-                fullCommand.extend(cmd)
-            else:
-                raise OstrichException(f"Invalid command definition in operation {operation}: expected string, list or dict")
+        if target_entry:
+            dispatch_cmd.extend(["--entrypoint", target_entry])
         
+        dispatch_cmd.append(target_image)
 
-        fullCommand = [str(i) for i in fullCommand]
-        logging.debug(f"Executing local command: {"|".join(fullCommand)}")
-        result=run(fullCommand, shell=False)
-        if(result.returncode != 0):
-            raise OstrichException(f"Container command {cmd} failed with code {result.returncode}")
-
-
-def task(operation: string, params: util.Params):
-
-    if not params.noDeps:
-        depfile=f"{params.tmpdir}/{operation}/dependencies.yaml"
-        if os.path.isfile(depfile):
-            with open(depfile) as f:
-                dependenciesYaml = yaml.safe_load(f)
-                dependencies=dependenciesYaml['dependencies']
-                for dep in dependencies:
-                    if dep in params.skip:
-                        logging.info(f"Skipping dependency {dep}")
-                    else:
-                        if dep in params.executedTasks:
-                            logging.info(f"Dependency {dep} already executed")
-                        else:
-                            params.executedTasks.append(dep)
-                            task(dep,params)
-
-    if not os.path.isdir(f"{params.tmpdir}/{operation}"):
-        raise OstrichException(f"Operation {operation} not found for template {params.getPluginConf('template.kind')}")
-
-    # Gets the runner: first look in the operation conf (<operation>/<operation>.yaml),
-    # else in the template conf (template.yaml)
-    operationConfFile=f"{params.tmpdir}/{operation}/{operation}.yaml"
-    runner="_NOTFOUND_"
-    if os.path.isfile(operationConfFile):
-        operationConf=util.safeLoad(operationConfFile)
-        runner=glom(operationConf,"runner.kind",default="_NOTFOUND_")
-
-    if(runner=="_NOTFOUND_"):
-        templateConfFile=f"{params.tmpdir}/template.yaml"
-        if os.path.isfile(templateConfFile):
-            templateConf=util.safeLoad(templateConfFile)
-            runner=glom(templateConf,"runner.kind",default="inprocess")
+        if isinstance(cmd_payload, list):
+            dispatch_cmd.extend(cmd_payload)
+        elif isinstance(cmd_payload, str):
+            dispatch_cmd.extend(["sh", "-c", cmd_payload])
+        elif isinstance(cmd_payload, dict):
+            for flag, val in cmd_payload.items():
+                dispatch_cmd.append(flag)
+                if val is not None: dispatch_cmd.append(str(val))
         else:
-            runner="inprocess"
+            raise OstrichException(f"Malformed command spec in {op_name}")
+
+        logging.debug("Container call: %s", " ".join(map(str, dispatch_cmd)))
+        exec_result = run([str(p) for p in dispatch_cmd], shell=False)
+        if exec_result.returncode != 0:
+            raise OstrichException(f"Task failure inside container: {cmd_payload} (Code {exec_result.returncode})")
 
 
-    logging.info("=========== %s ===========",operation)
-    if(runner=="inprocess"):
-        inprocess(operation,params)
-    elif(runner=="shell"):
-        shell(operation,params)
-    elif(runner=="container"):
-        container(operation,params)
-    else:
-        logging.error("Unknown runner %s for operation %s",runner,operation)
-        print("""Available runners:
-- inprocess : execute the operation in the current process (Python)
-- shell     : execute local commands defined in a YAML file
-- container : execute the operation in a container""")
-        raise OstrichException(f"Unknown runner {runner} for operation {operation}")
+def run_workflow_step(op_id: str, ctx: util.Params):
+    """
+    Handles dependency resolution and execution of a specific workflow operation.
+    """
+    if not ctx.noDeps:
+        dep_manifest = f"{ctx.tmpdir}/{op_id}/dependencies.yaml"
+        if os.path.isfile(dep_manifest):
+            with open(dep_manifest) as df:
+                tree = yaml.safe_load(df)
+                for requirement in tree.get('dependencies', []):
+                    if requirement in ctx.skip:
+                        logging.info("Bypassing skipped dependency: %s", requirement)
+                    elif requirement in ctx.executedTasks:
+                        logging.info("Dependency already met: %s", requirement)
+                    else:
+                        ctx.executedTasks.append(requirement)
+                        run_workflow_step(requirement, ctx)
+
+    op_root = f"{ctx.tmpdir}/{op_id}"
+    if not os.path.isdir(op_root):
+        raise OstrichException(f"Operation logic not found: {op_id}")
+
+    # Determine appropriate execution runner
+    op_cfg_file = f"{op_root}/{op_id}.yaml"
+    found_runner = "_UNDEFINED_"
+    if os.path.isfile(op_cfg_file):
+        found_runner = glom(util.safeLoad(op_cfg_file), "runner.kind", default="_UNDEFINED_")
+
+    if found_runner == "_UNDEFINED_":
+        tpl_cfg_file = f"{ctx.tmpdir}/template.yaml"
+        if os.path.isfile(tpl_cfg_file):
+            found_runner = glom(util.safeLoad(tpl_cfg_file), "runner.kind", default="inprocess")
+        else:
+            found_runner = "inprocess"
+
+    logging.info(">>> Executing stage: %s <<<", op_id)
+    dispatch_map = {
+        "inprocess": execute_native_task,
+        "shell": execute_shell_task,
+        "container": execute_container_task
+    }
+    
+    if found_runner not in dispatch_map:
+        logging.error("Unsupported execution engine: %s", found_runner)
+        print("Valid engines: inprocess, shell, container")
+        raise OstrichException(f"Invalid runner configuration: {found_runner}")
+        
+    dispatch_map[found_runner](op_id, ctx)
 
 
-
-def execute(params: util.Params):
-    templateAll(params)
-    task(params.operation,params)
-
-
+def orchestrate_execution(ctx: util.Params):
+    """Entry point for fulfilling an Ostrich operation request."""
+    templateAll(ctx)
+    run_workflow_step(ctx.operation, ctx)
 
 
+# --- Configuration and Help ---
 
-def configUsage():
-    print("""Usage: 
-- ost config <operation> <param>
-  Available operation:
-  - help                                      : print this help
-  - get | list                                : list all config keys
-  - get <key>                                 : get the value of the <key> key
-  - set <key> <value>                         : set the value of the <key> key to <value>
-  - unset <key>                               : delete the <key> key
-  - login <type> <url> <user> <password>      : login to a service of type <type> (example: helm)
-                                                if no parameter is set, interactive mode is proposed
-  - login <type> list                         : list the credentials  (token + user/password) for a service of type <type>
-  - logout <type> <url>                       : logout from a service of type <repotype>
-  - token <type> <url> <token>                : set a token a service of type <type> (example: sonarqube)
-                                                if no parameter is set, interactive mode is proposed
-  - token <type> list                         : list the credentials (token + user/password) for a service of type <type>
-          
-  Example:
-  To login to a helm registry: 
-    ost config login helm http://myregistry.com myuser mypassword
-  To logout from a sonar registry:
-    ost config logout sonar http://mysonar.com""")
+def display_config_help():
+    print(r'''                              _              
+     ____   ___  _____  ___  |_| ___  __   _  
+    / __ \ / __||_   _||   ) | |/ __||  |_| | 
+    |(oO)| \__ \  | |  |   \ | |\__ \)   _  | 
+    \_\/_/ |___/  |_|  |_|\_\|_||___/|__| |_|_  _
+      ||                            ___   __| || | __
+      ||                           / __| / _` || |/ /
+                                   \__ \| (_| ||   < 
+                                   |___/ \__,_||_|\_\
 
+Usage: 
+- ost config <action> <key> [value]
 
+Management Commands:
+  - help                  : Show this assistance menu
+  - list | get            : Enumerate all configuration entries
+  - get <target>          : Retrieve value for <target>
+  - set <key> <val>       : Define/Update <key> with <val>
+  - unset <key>           : Purge <key> from configuration
 
-def lscred(config: dict, type: string):
-    for k in config.keys():
-        spl=k.split("_")
-        if(len(spl)>2 and (spl[1] in ["credential"])):
-            if(type=="list" or spl[0]==type):
-                if(len(config[k].split(':'))==1):
-                    val="***"
-                else:
-                    val=config[k].split(':')[0]+":***"
-                print(f"{spl[0]}: {k.replace(spl[0]+'_credential_','')}={val}")
+Authentication:
+  - login <svc> <url> <u> <p> : Authenticate with <svc> (e.g., helm)
+  - login <svc> list          : Show registered credentials for <svc>
+  - logout <svc> <url>        : Remove credentials for <svc> @ <url>
+  - token <svc> <url> <t>     : Use a secret token for <svc>
+  - token <svc> list          : Enumerate registered tokens
+''')
 
 
-def config(params: util.Params):
-    params.collectStandardArgs()
+def list_credentials(data: dict, filter_type: str):
+    """Displays stored credentials with masked passwords."""
+    for entry, secret in data.items():
+        parts = entry.split("_")
+        if len(parts) > 2 and parts[1] == "credential":
+            if filter_type == "list" or parts[0] == filter_type:
+                sanitized = secret.split(":")[0] + ":***" if ":" in secret else "***"
+                endpoint = entry.replace(f"{parts[0]}_credential_", "")
+                print(f"{parts[0]} -> {endpoint}: {sanitized}")
 
-    if(len(params.operationParams)==0):
-        configUsage()
-        raise OstrichException("Invalid number of parameters")
 
-    if(params.operationParams[0]=="help" or params.usage):
-        configUsage()
+def manage_configuration(ctx: util.Params):
+    """Dispatches configuration management actions."""
+    ctx.collectStandardArgs()
+    params = ctx.operationParams
+
+    if not params:
+        display_config_help()
+        raise OstrichException("Missing configuration command")
+
+    cmd = params[0]
+    if cmd == "help" or ctx.usage:
+        display_config_help()
         return
     
-    confdir=util.getConfigDir()
-    conffile=util.getConfigFile()
+    cfg_base = util.get_tooling_config_path()
+    cfg_target = util.get_main_config_file()
+    os.makedirs(cfg_base, exist_ok=True)
 
-    os.makedirs(confdir,exist_ok=True)
-
-    logging.debug("Config file location: %s",conffile)
-
-    if(params.operationParams[0] in ["get","list"]):
-        if not path.isfile(conffile):
-            logging.info("No configuration available")
+    if cmd in ["get", "list"]:
+        if not os.path.isfile(cfg_target):
+            logging.info("Configuration storage is empty")
             return
-
-        config=util.safeLoad(conffile)
-        if(len(params.operationParams)==1):
-            for k in config.keys():
-                spl=k.split("_")
-                val=config[k]                    
-                if(len(spl)>2 and (spl[1] in ["credential"])):
-                    if(":" in config[k]):
-                        val=config[k].split(':')[0]+":***"
-                    else:
-                        val="***"
-                print(f"{k}={val}")
-        else:
-            try:
-                print(config[params.operationParams[1]])
-            except KeyError:
-                raise OstrichException(f"Key {params.operationParams[1]} not found")
-
-    elif(params.operationParams[0] in ["set"]):
-        if(len(params.operationParams)!=3):
-            logging.error("Invalid number of parameters")
-            configUsage()
-            raise OstrichException("Invalid number of parameters")
         
-        config=util.safeLoad(conffile)
-        with open(conffile, 'w+') as file:
-            config[params.operationParams[1]]=params.operationParams[2]
-            file.write(yaml.dump(config))
-            logging.info("Configuration updated for key %s",params.operationParams[1])
+        db = util.read_yaml_safe(cfg_target)
+        if len(params) == 1:
+            for k, v in db.items():
+                p = k.split("_")
+                masked = v.split(":")[0] + ":***" if len(p) > 2 and p[1] == "credential" and ":" in v else v
+                if len(p) > 2 and p[1] == "credential" and ":" not in v: masked = "***"
+                print(f"{k} = {masked}")
+        else:
+            if params[1] in db:
+                print(db[params[1]])
+            else:
+                raise OstrichException(f"Config key '{params[1]}' not found")
 
-    elif(params.operationParams[0] in ["unset"]):
-        if(len(params.operationParams)!=2):
-            logging.error("Invalid number of parameters")
-            configUsage()
-            raise OstrichException("Invalid number of parameters")
+    elif cmd == "set":
+        if len(params) < 3:
+            raise OstrichException("Set command requires both key and value")
+        db = util.read_yaml_safe(cfg_target)
+        db[params[1]] = params[2]
+        with open(cfg_target, 'w') as f:
+            yaml.dump(db, f)
+        logging.info("Updated key: %s", params[1])
+
+    elif cmd == "unset":
+        if len(params) < 2:
+            raise OstrichException("Unset command requires a key")
+        db = util.read_yaml_safe(cfg_target)
+        db.pop(params[1], None)
+        with open(cfg_target, 'w') as f:
+            yaml.dump(db, f)
+        logging.info("Purged key: %s", params[1])
+
+    elif cmd in ["login", "token"]:
+        db = util.read_yaml_safe(cfg_target)
+        if len(params) < 2:
+            raise OstrichException(f"Command '{cmd}' requires a service type")
         
-        with open(conffile, 'r+') as file:
-            config = yaml.safe_load(file)
-
-        with open(conffile, 'w+') as file:
-            config.pop(params.operationParams[1], None)
-            file.write(yaml.dump(config))
-        logging.info("Configuration key %s deleted",params.operationParams[1])
-
-    elif(params.operationParams[0] in ["login"]):
-        config=util.safeLoad(conffile)
-        if(len(params.operationParams)<2):
-            configUsage()
-            raise OstrichException("Invalid number of parameters")
-    
-        type=params.operationParams[1]
-
-        if(type=="list" or len(params.operationParams)>=3 and params.operationParams[2] in ["list"]):
-            lscred(config,type)
+        stype = params[1]
+        if stype == "list" or (len(params) > 2 and params[2] == "list"):
+            list_credentials(db, stype)
             return
 
-        if(len(params.operationParams)==5):
-            repo=params.operationParams[2]
-            user=params.operationParams[3]
-            password=params.operationParams[4]
-        elif(len(params.operationParams)==3):
-            repo=params.operationParams[2]
-            user=input(type+" user: ")
-            password=getpass.getpass()
+        # Handle interactive vs CLI inputs
+        if cmd == "login":
+            if len(params) == 5:
+                uri, usr, pwd = params[2], params[3], params[4]
+            elif len(params) == 3:
+                uri, usr = params[2], input(f"{stype} user: ")
+                pwd = getpass.getpass()
+            else:
+                uri = input(f"{stype} address: ")
+                usr = input(f"{stype} user: ")
+                pwd = getpass.getpass()
+            cred_val = f"{usr}:{pwd}"
         else:
-            repo=input(type+" address: ")
-            user=input(type+" user: ")
-            password=getpass.getpass()
+            if len(params) == 4:
+                uri, cred_val = params[2], params[3]
+            elif len(params) == 3:
+                uri = params[2]
+                cred_val = getpass.getpass(f"{stype} token: ")
+            else:
+                uri = input(f"{stype} address: ")
+                cred_val = getpass.getpass(f"{stype} token: ")
 
-        # Delete the trailing /
-        while(repo.endswith("/")):
-            repo=repo[:-1]            
+        uri = uri.rstrip("/")
+        db[f"{stype}_credential_{uri}"] = cred_val
+        with open(cfg_target, 'w') as f:
+            yaml.dump(db, f)
+        logging.info("Stored %s credentials for %s", cmd, uri)
 
-        with open(conffile, 'w+') as file:
-            config[type+'_credential_'+repo]=user+":"+password
-            file.write(yaml.dump(config))
-            logging.info("Credential registered for %s server %s",type,repo)
+    elif cmd == "logout":
+        if len(params) < 3:
+            raise OstrichException("Logout requires service type and address")
+        stype, uri = params[1], params[2]
+        db = util.read_yaml_safe(cfg_target)
+        db.pop(f"{stype}_credential_{uri.rstrip('/')}", None)
+        with open(cfg_target, 'w') as f:
+            yaml.dump(db, f)
+        logging.info("Removed credentials for %s", uri)
 
-    elif(params.operationParams[0] in ["token"]):
-        config=util.safeLoad(conffile)
-        if(len(params.operationParams)<2):
-            configUsage()
-            raise OstrichException("Invalid number of parameters")
-    
-        type=params.operationParams[1]
-
-        if(type=="list" or len(params.operationParams)>=3 and params.operationParams[2] in ["list"]):
-            lscred(config,type)
-            return
-
-        if(len(params.operationParams)==4):
-            repo=params.operationParams[2]
-            password=params.operationParams[3]
-        elif(len(params.operationParams)==3):
-            repo=params.operationParams[2]
-            password=getpass.getpass(type+" token: ")
-        else:
-            repo=input(type+" address: ")
-            password=getpass.getpass(type+" token: ")
-
-        # Delete the trailing /
-        while(repo.endswith("/")):
-            repo=repo[:-1]            
-
-        with open(conffile, 'w+') as file:
-            config[type+'_credential_'+repo]=password
-            file.write(yaml.dump(config))
-            logging.info("Token registered for %s server %s",type,repo)
-
-    elif(params.operationParams[0] in ["logout"]):
-        if(len(params.operationParams)<3):
-            configUsage()
-            raise OstrichException("Invalid number of parameters")
-
-        type=params.operationParams[1]
-
-        if(len(params.operationParams)==3):
-            repo=params.operationParams[2]
-        else:
-            repo=input(type+" address: ")
-
-        config=util.safeLoad(conffile)
-        with open(conffile, 'w+') as file:
-            config.pop(type+'_credential_'+repo, None)
-            file.write(yaml.dump(config))
-            logging.info("Credential deleted for %s server %s",type,repo)
+# Compatibility aliases
+inprocess = execute_native_task
+shell = execute_shell_task
+container = execute_container_task
+task = run_workflow_step
+execute = orchestrate_execution
+config = manage_configuration

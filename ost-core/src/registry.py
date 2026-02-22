@@ -5,437 +5,349 @@ import json
 import requests
 import re
 import urllib3
+import base64
 from urllib.parse import urlparse
 from packaging import version
-import base64
+
 import src.util as util
 from src.util import Params
 from src.ostrichException import OstrichException
 
-# Suppress InsecureRequestWarning as we often deal with internal/self-signed registries
-# that might be trusted at the system level but not by the requests' default CA bundle.
+# Ignore security warnings for self-hosted registries with local CA issues
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-DEFAULT_REGISTRY = {'name': 'ostrich', 'url': 'ghcr.io/rockops/osplate'}
+CORE_REGISTRY = {'name': 'ostrich', 'url': 'ghcr.io/rockops/osplate'}
 
-def load_registries():
-    config_file = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
-    config = util.safeLoad(config_file)
-    registries = config.get('registries', [])
+def get_config_registries():
+    """Retrieves the list of configured OCI registries."""
+    cfg_path = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
+    settings = util.read_yaml_safe(cfg_path)
+    defined = settings.get('registries', [])
     
-    # Check if ostrich is already there (manually added or overridden)
-    for reg in registries:
-        if reg.get('name') == 'ostrich':
-            return registries
+    # Ensure core registry is always present unless specifically overridden
+    if any(r.get('name') == 'ostrich' for r in defined):
+        return defined
             
-    # If not, add the default one at the beginning
-    return [DEFAULT_REGISTRY] + registries
+    return [CORE_REGISTRY] + defined
 
-def registryUsage():
-    print("""Usage: ost registry <command> [parameters]
-Available commands:
-  - login <name> : login to an OCI registry
-  - logout <name> : logout from an OCI registry
-  - add [-f] <name> <url> : add a registry to the configuration. Use -f to override.
-  - list : list all configured registries
-  - rm <name> : remove a registry from the configuration
+
+def render_registry_usage():
+    print("""OCI Registry Management:
+  ost registry <command> [args]
+
+Actions:
+  - login <name>           : Authenticate session with <name>
+  - logout <name>          : Terminate session with <name>
+  - add [-f] <name> <url>  : Register a new OCI source. -f to overwrite.
+  - list | ls              : Enumerate current registries
+  - rm <name>              : Unregister <name> from Ostrich
 """)
 
-def get_oci_auth(hostname):
-    config_path = os.path.expanduser("~") + "/.ostrich/helm/config/registry/config.json"
-    if not os.path.exists(config_path):
+
+def extract_credential(host):
+    """Attempts to find Helm-stored credentials for a given host."""
+    store = os.path.expanduser("~") + "/.ostrich/helm/config/registry/config.json"
+    if not os.path.exists(store):
         return None
     try:
-        with open(config_path, "r") as f:
-            auth_config = json.load(f)
-        return auth_config.get("auths", {}).get(hostname, {}).get("auth")
+        with open(store, "r") as f:
+            secret_data = json.load(f)
+        return secret_data.get("auths", {}).get(host, {}).get("auth")
     except Exception:
         return None
 
-def oci_request(url, auth_base64):
-    headers = {}
-    if auth_base64:
-        headers["Authorization"] = f"Basic {auth_base64}"
+
+def dispatch_oci_call(url, token_b64):
+    """Performs an authenticated OCI registry request with bearer token discovery."""
+    comm_headers = {"Authorization": f"Basic {token_b64}"} if token_b64 else {}
     
-    try:
-        # Try with standard verification
-        response = requests.get(url, headers=headers, timeout=10)
-    except Exception:
-        # Fallback to unverified for internal registries
-        response = requests.get(url, headers=headers, timeout=10, verify=False)
+    def internal_call(target, h, verify=True):
+        try:
+            return requests.get(target, headers=h, timeout=12, verify=verify)
+        except Exception:
+            return requests.get(target, headers=h, timeout=12, verify=False)
 
-    if response.status_code == 401:
-        challenge = response.headers.get("Www-Authenticate", "")
-        if "Bearer" in challenge:
-            match = re.search(r'Bearer realm="([^"]+)",service="([^"]+)"', challenge)
-            if match:
-                realm = match.group(1)
-                service = match.group(2)
-                scope = re.search(r'scope="([^"]+)"', challenge)
-                params = {"service": service}
-                if scope:
-                    params["scope"] = scope.group(1)
+    resp = internal_call(url, comm_headers)
+
+    # Handle Bearer authentication challenge
+    if resp.status_code == 401:
+        auth_header = resp.headers.get("Www-Authenticate", "")
+        if "Bearer" in auth_header:
+            realm_match = re.search(r'Bearer realm="([^"]+)"', auth_header)
+            svc_match = re.search(r'service="([^"]+)"', auth_header)
+            if realm_match and svc_match:
+                token_url = realm_match.group(1)
+                query = {"service": svc_match.group(1)}
+                scope_match = re.search(r'scope="([^"]+)"', auth_header)
+                if scope_match: query["scope"] = scope_match.group(1)
                 
-                token_headers = {"Authorization": f"Basic {auth_base64}"} if auth_base64 else {}
-                try:
-                    token_resp = requests.get(realm, params=params, headers=token_headers, timeout=10)
-                except Exception:
-                    token_resp = requests.get(realm, params=params, headers=token_headers, timeout=10, verify=False)
+                auth_resp = internal_call(token_url + "?" + "&".join([f"{k}={v}" for k, v in query.items()]), comm_headers)
                 
-                if token_resp.status_code == 200:
-                    token = token_resp.json().get("token") or token_resp.json().get("access_token")
-                    if token:
-                        headers = {"Authorization": f"Bearer {token}"}
-                        try:
-                            response = requests.get(url, headers=headers, timeout=10)
-                        except Exception:
-                            response = requests.get(url, headers=headers, timeout=10, verify=False)
+                if auth_resp.status_code == 200:
+                    payload = auth_resp.json()
+                    access_key = payload.get("token") or payload.get("access_token")
+                    if access_key:
+                        return internal_call(url, {"Authorization": f"Bearer {access_key}"})
                     
-    return response
+    return resp
 
-def registry(params: Params):
-    params.collectStandardArgs()
-    if len(params.operationParams) == 0:
-        registryUsage()
+
+def manage_registries(ctx: Params):
+    """CLI handler for registry operations."""
+    ctx.parse_cli_arguments()
+    args = ctx.operationParams
+    if not args:
+        render_registry_usage()
         return
 
-    config_file = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
+    db_path = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
+    mode = args[0]
 
-    sub_op = params.operationParams[0]
-    if sub_op == "login":
-        if len(params.operationParams) < 2:
-            registryUsage()
-            raise OstrichException("Invalid number of parameters")
-        name = params.operationParams[1]
-        
-        registries = load_registries()
-
-        
-        url = None
-        for reg in registries:
-            if reg.get('name') == name:
-                url = reg.get('url')
-                break
-        
-        if url is None:
-            logging.error(f"Registry '{name}' not found in configuration.")
-            logging.info("To add a registry, use: ost registry add <name> <url>")
-            raise OstrichException(f"Registry '{name}' not found")
-
-        logging.info(f"Logging in to registry: {name} ({url})")
-        
-        # Extract the registry part (e.g., docker.io/repo -> docker.io)
-        registry_url = url
-        if "://" in registry_url:
-            scheme_part, rest = registry_url.split("://", 1)
-            registry_host = rest.split("/", 1)[0]
-            registry_url = f"{scheme_part}://{registry_host}"
-        else:
-            registry_url = registry_url.split("/", 1)[0]
-
-        helm_args = ["registry", "login", registry_url]
-        if params.skipTlsVerify:
-            helm_args.append("--insecure")
-        util.helm(*helm_args)
-    elif sub_op == "logout":
-        if len(params.operationParams) < 2:
-            registryUsage()
-            raise OstrichException("Invalid number of parameters")
-        name = params.operationParams[1]
-        
-        registries = load_registries()
-
-        
-        url = None
-        for reg in registries:
-            if reg.get('name') == name:
-                url = reg.get('url')
-                break
-        
-        if url is None:
-            logging.error(f"Registry '{name}' not found in configuration.")
-            raise OstrichException(f"Registry '{name}' not found")
-
-        logging.info(f"Logging out from registry: {name} ({url})")
-        
-        registry_url = url
-        if "://" in registry_url:
-            scheme_part, rest = registry_url.split("://", 1)
-            registry_host = rest.split("/", 1)[0]
-            registry_url = f"{scheme_part}://{registry_host}"
-        else:
-            registry_url = registry_url.split("/", 1)[0]
-
-        helm_args = ["registry", "logout", registry_url]
-        if params.skipTlsVerify:
-            helm_args.append("--insecure")
-        util.helm(*helm_args)
-    elif sub_op == "add":
-        args = params.operationParams[1:]
-        force = params.forceTmpDir
-        
-        if "-f" in args:
-            force = True
-            args.remove("-f")
-        if "--force" in args:
-            force = True
-            args.remove("--force")
-
+    if mode == "login":
         if len(args) < 2:
-            registryUsage()
-            raise OstrichException("Invalid number of parameters")
-            
-        name = args[0]
-        url = args[1]
+            render_registry_usage()
+            raise OstrichException("Missing registry name")
         
-        config_dir = os.path.dirname(config_file)
-        os.makedirs(config_dir, exist_ok=True)
+        target = args[1]
+        active_list = get_config_registries()
+        endpoint = next((r['url'] for r in active_list if r['name'] == target), None)
         
-        config = util.safeLoad(config_file)
-        if 'registries' not in config:
-            config['registries'] = []
-            
-        # Check if registry already exists
-        if force:
-            config['registries'] = [r for r in config['registries'] if r.get('name') != name]
-        else:
-            for reg in config['registries']:
-                if reg.get('name') == name:
-                    raise OstrichException(f"Registry {name} already exists. Use \"ost registry add -f\" to force update")
+        if not endpoint:
+            logging.error("Registry '%s' undefined.", target)
+            raise OstrichException(f"Unknown registry identifier: {target}")
 
-        config['registries'].append({'name': name, 'url': url})
+        logging.info("Initiating authentication for %s (%s)", target, endpoint)
         
-        with open(config_file, 'w') as f:
-            yaml.dump(config, f)
+        # Isolate hostname
+        raw_uri = endpoint
+        if "://" in raw_uri:
+            p = urlparse(raw_uri)
+            raw_uri = f"{p.scheme}://{p.hostname}"
+        else:
+            raw_uri = raw_uri.split("/", 1)[0]
+
+        h_flags = ["registry", "login", raw_uri]
+        if ctx.skipTlsVerify: h_flags.append("--insecure")
+        util.execute_helm_command(*h_flags)
+
+    elif mode == "logout":
+        if len(args) < 2:
+            render_registry_usage()
+            raise OstrichException("Missing registry name")
             
-        logging.info(f"Registry {name} ({url}) added to configuration")
-    elif sub_op in ["list", "ls"]:
-        registries = load_registries()
+        target = args[1]
+        active_list = get_config_registries()
+        endpoint = next((r['url'] for r in active_list if r['name'] == target), None)
         
-        if not registries:
-            logging.info("No registries configured")
+        if not endpoint:
+            raise OstrichException(f"Registry '{target}' not in configuration")
+
+        logging.info("Terminating session with %s", target)
+        raw_host = endpoint.split("://")[-1].split("/")[0] if "://" in endpoint else endpoint.split("/")[0]
+        
+        h_flags = ["registry", "logout", raw_host]
+        if ctx.skipTlsVerify: h_flags.append("--insecure")
+        util.execute_helm_command(*h_flags)
+
+    elif mode == "add":
+        payload = args[1:]
+        overwrite = ctx.forceTmpDir
+        
+        # Manual flag detection
+        processed_args = []
+        for a in payload:
+            if a in ["-f", "--force"]: overwrite = True
+            else: processed_args.append(a)
+
+        if len(processed_args) < 2:
+            render_registry_usage()
+            raise OstrichException("Usage: add <name> <url>")
+            
+        new_tag, new_url = processed_args[0], processed_args[1]
+        
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        current_cfg = util.read_yaml_safe(db_path)
+        if 'registries' not in current_cfg: current_cfg['registries'] = []
+            
+        if overwrite:
+            current_cfg['registries'] = [r for r in current_cfg['registries'] if r.get('name') != new_tag]
+        elif any(r.get('name') == new_tag for r in current_cfg['registries']):
+            raise OstrichException(f"Conflict: Registry '{new_tag}' already exists. Use -f to force update.")
+
+        current_cfg['registries'].append({'name': new_tag, 'url': new_url})
+        with open(db_path, 'w') as f:
+            yaml.dump(current_cfg, f)
+        logging.info("Successfully registered '%s' [%s]", new_tag, new_url)
+
+    elif mode in ["list", "ls"]:
+        all_reg = get_config_registries()
+        if not all_reg:
+            logging.info("No OCI sources currently defined")
             return
-            
-        logging.info("Configured registries:")
-        for reg in registries:
-            print(f"- {reg.get('name')}: {reg.get('url')}")
-    elif sub_op == "rm":
-        if len(params.operationParams) < 2:
-            registryUsage()
-            raise OstrichException("Invalid number of parameters")
-        name = params.operationParams[1]
-        
-        if name == 'ostrich':
-            raise OstrichException("The 'ostrich' registry is the official Ostrich registry and cannot be removed.")
+        logging.info("Configured OCI Sources:")
+        for r in all_reg:
+            print(f" -> {r.get('name')} : {r.get('url')}")
 
-        config = util.safeLoad(config_file)
-        registries = config.get('registries', [])
-        
-        new_registries = [r for r in registries if r.get('name') != name]
-        
-        if len(new_registries) == len(registries):
-            raise OstrichException(f"Registry {name} not found")
+    elif mode == "rm":
+        if len(args) < 2:
+            render_registry_usage()
+            raise OstrichException("Missing registry identifier")
+        target = args[1]
+        if target == 'ostrich':
+            raise OstrichException("Removal of the default 'ostrich' registry is prohibited.")
 
-        config['registries'] = new_registries
-        with open(config_file, 'w') as f:
-            yaml.dump(config, f)
-            
-        logging.info(f"Registry {name} removed from configuration")
+        current_cfg = util.read_yaml_safe(db_path)
+        filtered = [r for r in current_cfg.get('registries', []) if r.get('name') != target]
+        
+        if len(filtered) == len(current_cfg.get('registries', [])):
+            raise OstrichException(f"Identifier '{target}' not located")
+
+        current_cfg['registries'] = filtered
+        with open(db_path, 'w') as f:
+            yaml.dump(current_cfg, f)
+        logging.info("Unregistered source '%s'", target)
     else:
-        registryUsage()
-        raise OstrichException(f"Unknown registry sub-command: {sub_op}")
+        render_registry_usage()
+        raise OstrichException(f"Unmapped registry action: {mode}")
 
-def search(params: Params):
-    config_file = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
-    # Skip the "search" operation parameter if called from template.py
-    # If called from "ost template search", params.operationParams[0] is "search"
-    args = params.operationParams[1:]
-    if len(args) == 0:
-        # We allow empty search to list everything if no query is provided
-        # Wait, the user might want "ost template search" to list everything?
-        # Actually in the previous implementation it raised an error if no query.
-        # But if we list everything from registries it might be noisy.
-        # Let's keep the logic but maybe allow empty query if registry filter is present.
-        pass
 
-    show_all_versions = False
-    if "--versions" in args:
-        show_all_versions = True
-        args.remove("--versions")
-
-    registries = load_registries()
-    registry_names = [r.get('name') for r in registries]
-
-    registry_filter = None
-    query = ""
-
-    if len(args) >= 2:
-        registry_filter = args[0]
-        query = args[1]
-    elif len(args) == 1:
-        if args[0] in registry_names:
-            registry_filter = args[0]
-            query = ""
-        else:
-            query = args[0]
+def perform_template_discovery(ctx: Params):
+    """Searches through OCI registries for available templates."""
+    search_params = ctx.operationParams[1:]
     
-    found = False
-    for reg in registries:
-        if registry_filter and reg.get('name') != registry_filter:
+    detailed_listing = False
+    if "--versions" in search_params:
+        detailed_listing = True
+        search_params.remove("--versions")
+
+    all_sources = get_config_registries()
+    permitted_names = [r.get('name') for r in all_sources]
+
+    limit_source = None
+    term = ""
+
+    if len(search_params) >= 2:
+        limit_source, term = search_params[0], search_params[1]
+    elif len(search_params) == 1:
+        if search_params[0] in permitted_names:
+            limit_source = search_params[0]
+        else:
+            term = search_params[0]
+    
+    hits = 0
+    for src in all_sources:
+        if limit_source and src.get('name') != limit_source:
             continue
 
-        url_str = reg.get('url')
-        if "://" not in url_str:
-            url_str = "https://" + url_str
+        raw_loc = src.get('url')
+        if "://" not in raw_loc: raw_loc = "https://" + raw_loc
         
-        parsed = urlparse(url_str)
-        hostname = parsed.hostname
-        auth = get_oci_auth(hostname)
-        path = parsed.path.strip("/")
+        parsed_uri = urlparse(raw_loc)
+        host = parsed_uri.hostname
+        credential = extract_credential(host)
+        prefix_path = parsed_uri.path.strip("/")
         
-        repo_names = []
-        discovery_done = False
+        discovered_repos = []
 
-        # 1. Try GitHub API
-        if "ghcr.io" in hostname or "github.com" in hostname:
-            path_parts = path.split("/")
-            if path_parts and path_parts[0]:
-                owner = path_parts[0]
-                prefix = "/".join(path_parts[1:])
+        # Provider Strategy 1: GitHub API Integration
+        if any(g in host for g in ["ghcr.io", "github.com"]):
+            segments = prefix_path.split("/")
+            if segments and segments[0]:
+                org = segments[0]
+                filter_key = "/".join(segments[1:])
                 
-                for api_type in ["orgs", "users"]:
-                    gh_url = f"https://api.github.com/{api_type}/{owner}/packages?package_type=container"
-                    headers = {"Accept": "application/vnd.github+json"}
-                    if auth:
+                for scope in ["orgs", "users"]:
+                    api_endpoint = f"https://api.github.com/{scope}/{org}/packages?package_type=container"
+                    auth_headers = {"Accept": "application/vnd.github+json"}
+                    if credential:
                         try:
-                            decoded = base64.b64decode(auth).decode('utf-8')
-                            if ":" in decoded:
-                                _, token = decoded.split(":", 1)
-                                headers["Authorization"] = f"token {token}"
-                        except Exception:
-                            pass
+                            readable = base64.b64decode(credential).decode('utf-8')
+                            if ":" in readable:
+                                auth_headers["Authorization"] = f"token {readable.split(':', 1)[1]}"
+                        except Exception: pass
                     
                     try:
-                        resp = requests.get(gh_url, headers=headers, timeout=10)
-                        if resp.status_code == 200:
-                            gh_packages = resp.json()
-                            for pkg in gh_packages:
-                                pkg_name = pkg.get("name")
-                                # Full repo name in OCI: owner/pkg_name
-                                full_repo_name = f"{owner}/{pkg_name}"
-                                
-                                if prefix and not pkg_name.startswith(prefix):
-                                    continue
-                                
-                                if not query or query in full_repo_name:
-                                    repo_names.append(full_repo_name)
-                            discovery_done = True
+                        gh_resp = requests.get(api_endpoint, headers=auth_headers, timeout=12)
+                        if gh_resp.status_code == 200:
+                            for item in gh_resp.json():
+                                name = item.get("name")
+                                full_id = f"{org}/{name}"
+                                if (not filter_key or name.startswith(filter_key)) and (not term or term in full_id):
+                                    discovered_repos.append(full_id)
                             break
-                        elif resp.status_code in [401, 403]:
-                            if not auth:
-                                logging.warning(f"GitHub registry '{reg['name']}' requires authentication to list packages.")
-                                logging.info(f"Please login using: ost registry login {reg['name']}")
-                            else:
-                                logging.warning(f"Authentication failed for GitHub registry '{reg['name']}'. Your token might be expired or lack 'read:packages' scope.")
-                                logging.info(f"You can try logging in again: ost registry login {reg['name']}")
-                            # We stop searching for this registry if we hit an auth error on the owner
-                            discovery_done = True
+                        elif gh_resp.status_code in [401, 403]:
+                            status = "unauthenticated" if not credential else "denied"
+                            logging.warning("GitHub access %s for %s", status, src['name'])
                             break
-                    except Exception as e:
-                        logging.debug(f"GitHub API error for {gh_url}: {e}")
+                    except Exception: pass
 
-        # 2. Try Harbor API
-        if not discovery_done:
-            harbor_url = None
-            if query:
-                harbor_url = f"{parsed.scheme}://{hostname}/api/v2.0/search?q={query}"
-            else:
-                harbor_url = f"{parsed.scheme}://{hostname}/api/v2.0/repositories"
-            
-            resp = oci_request(harbor_url, auth)
-            if resp.status_code == 200:
-                data = resp.json()
-                repos = data.get("repository") if isinstance(data, dict) else data
-                if repos:
-                    for r in repos:
-                        repo_names.append(r.get("repository_name") or r.get("name"))
-                    discovery_done = True
-            elif resp.status_code in [401, 403]:
-                if not auth:
-                    logging.warning(f"Registry '{reg['name']}' requires authentication to search.")
-                    logging.info(f"Please login using: ost registry login {reg['name']}")
-                else:
-                    logging.warning(f"Authentication failed for registry '{reg['name']}'.")
-                    logging.info(f"Please check your credentials or login again: ost registry login {reg['name']}")
-                discovery_done = True
+        # Provider Strategy 2: Harbor-compatible Search API
+        if not discovered_repos:
+            search_api = f"{parsed_uri.scheme}://{host}/api/v2.0/search?q={term}" if term else f"{parsed_uri.scheme}://{host}/api/v2.0/repositories"
+            h_resp = dispatch_oci_call(search_api, credential)
+            if h_resp.status_code == 200:
+                raw_data = h_resp.json()
+                results = raw_data.get("repository") if isinstance(raw_data, dict) else raw_data
+                if results:
+                    for obj in results:
+                        discovered_repos.append(obj.get("repository_name") or obj.get("name"))
 
-        # 3. Try standard OCI _catalog
-        if not discovery_done:
-            catalog_url = f"{parsed.scheme}://{hostname}/v2/_catalog"
-            resp = oci_request(catalog_url, auth)
-            if resp.status_code == 200:
-                candidates = resp.json().get("repositories", [])
-                for r in candidates:
-                    if not query or query in r:
-                        repo_names.append(r)
-                discovery_done = True
-            elif resp.status_code in [401, 403]:
-                if not auth:
-                    logging.warning(f"Registry '{reg['name']}' requires authentication to list catalog.")
-                    logging.info(f"Please login using: ost registry login {reg['name']}")
-                else:
-                    logging.warning(f"Catalog access denied for registry '{reg['name']}'. It might be required to login or the feature might be disabled.")
-                    logging.info(f"You can try logging in: ost registry login {reg['name']}")
-                discovery_done = True
+        # Provider Strategy 3: Standard OCI Catalog Discovery
+        if not discovered_repos:
+            cat_url = f"{parsed_uri.scheme}://{host}/v2/_catalog"
+            c_resp = dispatch_oci_call(cat_url, credential)
+            if c_resp.status_code == 200:
+                for entry in c_resp.json().get("repositories", []):
+                    if not term or term in entry:
+                        discovered_repos.append(entry)
 
-        # Process found repositories
-        for repo_name in sorted(list(set(repo_names))):
-            # If a path is configured for the registry, the repository must be within that path
-            display_name = None
-            if path:
-                if repo_name == path:
-                    display_name = ""
-                elif repo_name.startswith(path + "/"):
-                    display_name = repo_name[len(path):].lstrip("/")
-                elif repo_name == f"{hostname}/{path}":
-                    display_name = ""
-                elif repo_name.startswith(f"{hostname}/{path}/"):
-                    display_name = repo_name[len(f"{hostname}/{path}"):].lstrip("/")
+        # Output formatting and version discovery
+        for repo in sorted(list(set(discovered_repos))):
+            rel_name = None
+            if prefix_path:
+                if repo == prefix_path: rel_name = ""
+                elif repo.startswith(prefix_path + "/"):
+                    rel_name = repo[len(prefix_path):].lstrip("/")
+                elif repo == f"{host}/{prefix_path}": rel_name = ""
+                elif repo.startswith(f"{host}/{prefix_path}/"):
+                    rel_name = repo[len(f"{host}/{prefix_path}"):].lstrip("/")
                 
-                if display_name is None:
-                    # Skip repositories outside the configured path
-                    continue
+                if rel_name is None: continue
             else:
-                display_name = repo_name
+                rel_name = repo
 
-            full_display_name = f"{reg['name']}/{display_name}" if display_name else reg['name']
+            qualified_label = f"{src['name']}/{rel_name}" if rel_name else src['name']
 
-            tags_url = f"{parsed.scheme}://{hostname}/v2/{repo_name}/tags/list"
-            tags_resp = oci_request(tags_url, auth)
-            if tags_resp.status_code == 200:
-                tags = tags_resp.json().get("tags", [])
-                if tags:
-                    if show_all_versions:
-                        for t in tags:
-                            print(f"- {full_display_name}:{t}")
-                            found = True
+            # Tag enumeration
+            tag_svc = f"{parsed_uri.scheme}://{host}/v2/{repo}/tags/list"
+            t_resp = dispatch_oci_call(tag_svc, credential)
+            if t_resp.status_code == 200:
+                tag_list = t_resp.json().get("tags", [])
+                if tag_list:
+                    if detailed_listing:
+                        for tag in tag_list:
+                            print(f" * {qualified_label}:{tag}")
+                            hits += 1
                     else:
                         try:
-                            valid_tags = [t for t in tags if t]
-                            if valid_tags:
-                                latest = sorted(valid_tags, key=version.parse)[-1]
-                                print(f"- {full_display_name}:{latest}")
-                                found = True
+                            valid = [t for t in tag_list if t]
+                            if valid:
+                                top = sorted(valid, key=version.parse)[-1]
+                                print(f" * {qualified_label}:{top}")
+                                hits += 1
                         except Exception:
-                            latest = sorted(tags)[-1]
-                            print(f"- {full_display_name}:{latest}")
-                            found = True
+                            print(f" * {qualified_label}:{sorted(tag_list)[-1]}")
+                            hits += 1
                 else:
-                    print(f"- {full_display_name}")
-                    found = True
+                    print(f" * {qualified_label}")
+                    hits += 1
             else:
-                print(f"- {full_display_name}")
-                found = True
+                print(f" * {qualified_label}")
+                hits += 1
     
-    if not found:
-        logging.info("No matching packages found")
+    if hits == 0:
+        logging.info("No matching template resources identified in registries.")
+
+# Compatibility aliases
+registry = manage_registries
+search = perform_template_discovery

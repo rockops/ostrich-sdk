@@ -4,13 +4,13 @@ import os
 import shutil
 import string
 import sys
-from typing import Any
+from typing import Any, List, Optional, Union
 from semver import Version
 import yaml
 import hashlib
 from jinja2 import Environment, FileSystemLoader, Template
 from src.ostrichException import OstrichException
-from subprocess import run
+from subprocess import run, CompletedProcess
 import subprocess
 from pathlib import Path
 import jsonschema
@@ -18,740 +18,672 @@ from envsubst import envsubst
 from glom import glom
 import copy
 
-class SafeStreamHandler(logging.StreamHandler):
+class RobustLoggingHandler(logging.StreamHandler):
     """
-    A custom logging handler that suppresses [WinError 6] on Windows, 
-    which occur when writing to closed handles (often during pytest execution).
+    Enhanced StreamHandler that gracefully handles invalid handles, 
+    particularly useful in Windows environments and parallel test execution.
     """
     def emit(self, record):
         try:
             super().emit(record)
-        except OSError as e:
-            # On Windows, [WinError 6] "The handle is invalid" happens when
-            # pytest captures stdout/stderr. We suppress this specific error.
-            if os.name == 'nt' and getattr(e, 'winerror', 0) == 6:
-                pass
-            else:
-                raise
+        except OSError as exc:
+            if os.name == 'nt' and getattr(exc, 'winerror', 0) == 6:
+                return
+            raise
 
-# Location of the config file
-location=""
-configAll: Any = []
-jinja: Template
-e: Environment
+# Global execution state
+configAll = {}
+jinja_environment = None
+active_working_directory = None
+global_jinja_template = None
 
-class Params:
-    usage=False
-    debug=False
-    dryRun=False
-    rmTmpDir=False
-    noDeps=False
-    skip=[]
-    executedTasks=[]
-    userOutput=False
-    pluginFile="ostrich.yaml"
-    kubeConfig: string=None
-    operation=""
-    operationParams=[]
-    registry: string=None
-    tmpdir: string=None
-    pluginTmpDir: string=None
-    loglevel=logging.INFO
-    forceTmpDir=False
-    deletePluginTmpDir=True
-    nologo=False
-    skipTlsVerify=False
-    
-    parsedPluginConfig: Any
+class OstrichRuntimeContext:
+    """
+    Manages the parameters and state for a single Ostrich execution session.
+    """
+    def __init__(self):
+        self.usage = False
+        self.debug = False
+        self.dryRun = False
+        self.rmTmpDir = False
+        self.noDeps = False
+        self.skip = []
+        self.executedTasks = []
+        self.userOutput = False
+        self.pluginFile = "ostrich.yaml"
+        self.kubeConfig: Optional[str] = None
+        self.operation = ""
+        self.operationParams = []
+        self.registry: Optional[str] = None
+        self.tmpdir: Optional[str] = None
+        self.pluginTmpDir: Optional[str] = None
+        self.loglevel = logging.INFO
+        self.forceTmpDir = False
+        self.deletePluginTmpDir = True
+        self.nologo = False
+        self.skipTlsVerify = False
+        self.parsedPluginConfig: Any = None
 
-    def loadPluginConf(self):
+    def initialize_plugin_context(self):
+        """Loads and prepares the plugin configuration."""
         try:
-            logging.debug("Loading %s",self.pluginFile)
+            logging.debug("Initializing context from %s", self.pluginFile)
             
-            content = None
-            # Try different encodings: utf-8-sig handles BOM, utf-16 for PowerShell 5.1 redirection
-            for encoding in ['utf-8-sig', 'utf-16']:
+            raw_content = None
+            # Search for content with supported encodings
+            for enc in ['utf-8-sig', 'utf-16']:
                 try:
-                    with open(self.pluginFile, 'r', encoding=encoding) as f:
-                        content = f.read()
+                    with open(self.pluginFile, 'r', encoding=enc) as f:
+                        raw_content = f.read()
                         break
                 except (UnicodeDecodeError, UnicodeError):
                     continue
             
-            if content is None:
-                # Fallback to default encoding
+            if raw_content is None:
                 with open(self.pluginFile, 'r') as f:
-                    content = f.read()
+                    raw_content = f.read()
 
-            # Templating with Jinja
-            env_data = os.environ.copy()
-            env_yaml_path = os.path.join(getConfigRoot(), "env.yaml")
-            if os.path.exists(env_yaml_path):
+            # Prepare environmental data for templating
+            context_data = os.environ.copy()
+            settings_path = Path(get_configuration_base()) / "env.yaml"
+            if settings_path.exists():
                 try:
-                    with open(env_yaml_path, 'r') as f:
-                        env_config = yaml.safe_load(f)
-                        if env_config:
-                            env_data.update(env_config)
-                except Exception as e:
-                    logging.warning("Error loading env.yaml: %s", e)
+                    with open(settings_path, 'r') as f:
+                        extra_settings = yaml.safe_load(f)
+                        if extra_settings:
+                            context_data.update(extra_settings)
+                except Exception as err:
+                    logging.warning("Failed to incorporate env.yaml: %s", err)
 
-            jinja_env = Environment(
-                variable_start_string='[[',
-                variable_end_string=']]',
-            )
+            engine = Environment(variable_start_string='[[', variable_end_string=']]')
             try:
-                content = jinja_env.from_string(content).render(env=env_data)
-            except Exception as e:
-                raise OstrichException(f"Error templating {self.pluginFile}: {e}")
+                processed_content = engine.from_string(raw_content).render(env=context_data)
+            except Exception as render_err:
+                raise OstrichException(f"Templating failure in {self.pluginFile}: {render_err}")
 
-            content = envsubst(content)
-            logging.debug("Templated config:\n%s", content)
-            self.parsedPluginConfig = yaml.safe_load(content)
+            processed_content = envsubst(processed_content)
+            logging.debug("Expanded configuration:\n%s", processed_content)
+            self.parsedPluginConfig = yaml.safe_load(processed_content)
             
-            # Schema validation
+            # Validate against schema if available
             if self.parsedPluginConfig:
-                template_kind = self.getPluginConf("template.kind", None)
-                if template_kind:
+                kind = self.fetch_plugin_setting("template.kind", None)
+                if kind:
                     try:
-                        template_path = getTemplatePath(str(template_kind))
-                        schema_path = os.path.join(template_path, "_doc/schema.yaml")
-                        if os.path.exists(schema_path):
-                            logging.debug("Validating %s against schema %s", self.pluginFile, schema_path)
-                            with open(schema_path, 'r') as sf:
-                                schema = yaml.safe_load(sf)
-                            jsonschema.validate(instance=self.parsedPluginConfig, schema=schema)
-                    except OstrichException:
-                        # Template path not found, skip validation
-                        pass
-                    except jsonschema.exceptions.ValidationError as e:
-                        path = ".".join([str(p) for p in e.path])
-                        if path:
-                            raise OstrichException(f"Configuration validation failed for {self.pluginFile} at key \"{path}\":\n{e.message}")
+                        tpl_path = locate_template_directory(str(kind))
+                        schema_file = Path(tpl_path) / "_doc" / "schema.yaml"
+                        if schema_file.exists():
+                            logging.debug("Validating configuration against %s", schema_file)
+                            with open(schema_file, 'r') as sf:
+                                rules = yaml.safe_load(sf)
+                            jsonschema.validate(instance=self.parsedPluginConfig, schema=rules)
+                    except (OstrichException, jsonschema.exceptions.ValidationError) as validation_err:
+                        if isinstance(validation_err, OstrichException):
+                            pass # Template not found, skip
                         else:
-                            raise OstrichException(f"Configuration validation failed for {self.pluginFile}:\n{e.message}")
+                            key_path = ".".join(map(str, validation_err.path))
+                            prefix = f"Violation at '{key_path}': " if key_path else ""
+                            raise OstrichException(f"Schema validation error in {self.pluginFile}: {prefix}{validation_err.message}")
 
-            self.parsedPluginConfig['params']=self
-        except yaml.YAMLError as e:
-            raise OstrichException(f"Error parsing YAML file {self.pluginFile} {str(e)}")
-        except BaseException as e:
-            raise OstrichException(f"Error loading file {self.pluginFile} {str(e)}")
+            self.parsedPluginConfig['params'] = self
+        except yaml.YAMLError as y_err:
+            raise OstrichException(f"YAML syntax error in {self.pluginFile}: {y_err}")
+        except Exception as generic_err:
+            raise OstrichException(f"Resource loading failed for {self.pluginFile}: {generic_err}")
 
-    def getPluginConf(self, key: string, defval="_UNDEFINED_"):
+    def fetch_plugin_setting(self, path_key: str, fallback="_UNDEFINED_"):
+        """Retrieves a nested configuration value using a dot-separated key."""
         try:
-            ret=self.parsedPluginConfig
-            for k in key.split("."):
-                ret=ret[k]
-            return ret
-        except BaseException:
-            if defval=="_UNDEFINED_":
-                logging.fatal("Cannot get plugin param \"%s\" in file %s",key,self.pluginFile)
+            nodes = path_key.split(".")
+            cursor = self.parsedPluginConfig
+            for node in nodes:
+                cursor = cursor[node]
+            return cursor
+        except Exception:
+            if fallback == "_UNDEFINED_":
+                logging.fatal("Mandatory parameter '%s' missing in %s", path_key, self.pluginFile)
                 raise
-            else:
-                return defval
+            return fallback
 
-    def collectStandardArgs(self):
-        new_args = []
-        i = 0
-        args = self.operationParams
-        while i < len(args):
-            if args[i] in ['-o', '--output']:
-                if i + 1 < len(args):
-                    self.tmpdir = args[i+1]
+    def parse_cli_arguments(self):
+        """Extracts standard Ostrich options from the operation parameters."""
+        remaining = []
+        idx = 0
+        input_args = self.operationParams
+        while idx < len(input_args):
+            arg = input_args[idx]
+            if arg in ['-o', '--output']:
+                if idx + 1 < len(input_args):
+                    self.tmpdir = input_args[idx+1]
                     self.userOutput = True
-                    i += 2
-                    continue
+                    idx += 2
                 else:
-                    raise OstrichException("Missing value for -o/--output option")
-            elif args[i] in ['-dr', '--dry-run']:
+                    raise OstrichException("Flag %s requires a path" % arg)
+            elif arg in ['-dr', '--dry-run']:
                 self.dryRun = True
                 if self.tmpdir is None:
                     self.tmpdir = "dry-run"
-                i += 1
-                continue
-            elif args[i] == '--rm':
+                idx += 1
+            elif arg == '--rm':
                 self.rmTmpDir = True
-                i += 1
-                continue
-            elif args[i] in ['-d', '--debug']:
+                idx += 1
+            elif arg in ['-d', '--debug']:
                 logging.getLogger().setLevel(logging.DEBUG)
                 self.loglevel = logging.DEBUG
-                i += 1
-                continue
-            elif args[i] == '--nologo':
+                idx += 1
+            elif arg == '--nologo':
                 self.nologo = True
-                i += 1
-                continue
-            elif args[i] == '--force':
+                idx += 1
+            elif arg == '--force':
                 self.forceTmpDir = True
-                i += 1
-                continue
-            elif (args[i] == '-h' or args[i] == '--help' or args[i] == 'help'):
-                self.usage=True
-                i += 1
-                continue
-            elif args[i] == '--skip-tls-verify':
+                idx += 1
+            elif arg in ['-h', '--help', 'help']:
+                self.usage = True
+                idx += 1
+            elif arg == '--skip-tls-verify':
                 self.skipTlsVerify = True
-                i += 1
-                continue
+                idx += 1
             else:
-                new_args.append(args[i])
-                i += 1
-        self.operationParams = new_args
+                remaining.append(arg)
+                idx += 1
+        self.operationParams = remaining
 
-def runcheck(cmd):
-    if(run(cmd).returncode!=0):
-        raise OstrichException(f"Error executing command {' '.join(cmd)}")
+# Compatibility alias
+Params = OstrichRuntimeContext
+Params.loadPluginConf = OstrichRuntimeContext.initialize_plugin_context
+Params.getPluginConf = OstrichRuntimeContext.fetch_plugin_setting
+Params.collectStandardArgs = OstrichRuntimeContext.parse_cli_arguments
 
-def root():
-    return os.path.abspath(os.path.dirname(sys.argv[0]))
+def verify_execution(command_list):
+    """Executes a command and raises an exception if it fails."""
+    if run(command_list).returncode != 0:
+        raise OstrichException("Command failed: %s" % " ".join(command_list))
 
-def extraTemplateRoot():
-    return getConfigRoot()+"/templates"
+def get_binary_root():
+    """Returns the absolute path to the Ostrich SDK base directory."""
+    return str(Path(__file__).resolve().parent.parent)
 
-def templateRoot():
-    return root()+"/templates"
+def get_custom_template_base():
+    return get_configuration_base() + "/templates"
 
-def testTemplateRoot():
-    return root()+"/test-templates"
+def get_bundled_template_base():
+    return get_binary_root() + "/templates"
 
-def getTemplatePath(tpl: string):
-    tpl_str = str(tpl)
-    roots = [templateRoot(), testTemplateRoot(), extraTemplateRoot()]
+def get_testing_template_base():
+    return get_binary_root() + "/test-templates"
+
+def locate_template_directory(identifier: str):
+    """Finds the filesystem path for a given template identifier."""
+    target_id = str(identifier)
+    search_origins = [get_bundled_template_base(), get_testing_template_base(), get_custom_template_base()]
     
-    # 1. Try direct match by directory name
-    for root in roots:
-        ret = os.path.join(root, tpl_str)
-        if os.path.isdir(ret):
-            return ret
+    # Priority 1: Match by direct folder name
+    for folder in search_origins:
+        candidate = Path(folder) / target_id
+        if candidate.is_dir():
+            return str(candidate)
             
-    # 2. Try match by business name in template.yaml
-    for root in roots:
-        if not os.path.exists(root):
+    # Priority 2: Match by internal metadata 'name' attribute
+    for folder in search_origins:
+        base_path = Path(folder)
+        if not base_path.exists():
             continue
-        for t in os.listdir(root):
-            if t == "global":
-                continue
-            path = os.path.join(root, t)
-            if os.path.isdir(path):
-                yaml_path = os.path.join(path, "template.yaml")
-                if os.path.exists(yaml_path):
+        for entry in base_path.iterdir():
+            if entry.is_dir() and entry.name != "global":
+                manifest = entry / "template.yaml"
+                if manifest.exists():
                     try:
-                        with open(yaml_path, 'r') as f:
-                            config = yaml.safe_load(f)
-                            if config and config.get('name') == tpl_str:
-                                return path
+                        with open(manifest, 'r') as f:
+                            meta = yaml.safe_load(f)
+                            if meta and meta.get('name') == target_id:
+                                return str(entry)
                     except Exception:
-                        pass
+                        continue
 
-    raise OstrichException(f"Template {tpl_str} does not exist")
+    raise OstrichException("Template resource '%s' not located" % target_id)
 
+def define_working_location(path):
+    global active_working_directory
+    active_working_directory = path
 
-def setLocation(str):
-    global location
-    location=str
+def fetch_working_location():
+    return active_working_directory
 
-def getLocation():
-    global location
-    return location
+# --- Template Engine Logic ---
 
-## Jinja2 filters
-def here(str):
-    if(not str):
-      raise OstrichException(f"'here' fiter called with an undefined or empty input "+getCurrentLocation())  
+def filter_resolve_local(path_str):
+    if not path_str:
+        raise OstrichException("Relative path filter received empty input" + get_diagnostic_context())
+    if os.path.isabs(path_str):
+        return path_str.replace("\\", "/")
+    return os.path.normpath(os.path.join(active_working_directory, path_str)).replace("\\", "/")
+
+def filter_strip_slashes(val):
+    if val == "": return ""
+    if not val:
+        raise OstrichException("Slug filter received empty input" + get_diagnostic_context())
+    return str(val).rstrip("/\\")
     
-    global location
-    if(os.path.isabs(str)):
-        return str.replace("\\", "/")
-    else:
-        return os.path.normpath(os.path.join(location, str)).replace("\\", "/")
+def filter_md5(text):
+    if not text:
+        raise OstrichException("MD5 filter received empty input" + get_diagnostic_context())
+    return hashlib.md5(text.encode('utf-8')).hexdigest()
 
-def noslash(str):
-    if(str == ""):
-        return ""
-    if(not str):
-      raise OstrichException(f"'noslash' fiter called with an empty input "+getCurrentLocation())  
-    ret=str
-    while(ret.endswith("/") or ret.endswith("\\")):
-        ret=ret[:-1]
-    return ret
-    
-def md5hash(str):
-    if(not str):
-      raise OstrichException(f"'md5hash' fiter called with an undefined or empty input "+getCurrentLocation())  
-    return hashlib.md5(str.encode('utf-8')).hexdigest()
+def filter_tpl_asset(filename):
+    if not filename:
+        raise OstrichException("Asset lookup received empty input" + get_diagnostic_context())
+    return (configAll['_ostrich']['templateLocation'] + "/" + filename).replace("\\", "/")
 
-def fromTemplate(str):
-    if(not str):
-      raise OstrichException(f"'fromTemplate' fiter called with an undefined or empty input "+getCurrentLocation())  
-    return (configAll['_ostrich']['templateLocation']+"/"+str).replace("\\", "/")
+def filter_global_asset(filename):
+    if not filename:
+        raise OstrichException("Global asset lookup received empty input" + get_diagnostic_context())
+    return (get_bundled_template_base() + "/" + filename).replace("\\", "/")
 
-def fromTemplates(str):
-    if(not str):
-      raise OstrichException(f"'fromTemplates' fiter called with an undefined or empty input "+getCurrentLocation())  
-    return (templateRoot()+"/"+str).replace("\\", "/")
+def filter_instance_asset(filename):
+    return os.path.abspath(configAll['_ostrich']['tmpdir'] + "/" + filename).replace("\\", "/")
 
-def fromTemplateInstance(str):
-    global configAll
-    return os.path.abspath(configAll['_ostrich']['tmpdir']+"/"+str).replace("\\", "/")
+def filter_operation_asset(filename):
+    if not filename:
+        raise OstrichException("Job asset lookup received empty input" + get_diagnostic_context())
+    base = configAll['_ostrich']['templateLocation']
+    op = configAll['_ostrich']['operation']
+    return (f"{base}/{op}/{filename}").replace("\\", "/")
 
-def fromJob(str):
-    if(not str):
-      raise OstrichException(f"'fromJob' fiter called with an undefined or empty input "+getCurrentLocation())  
-    return (configAll['_ostrich']['templateLocation']+"/"+configAll['_ostrich']['operation']+"/"+str).replace("\\", "/")
+def filter_strip_snapshot(version_str):
+    if not version_str:
+        raise OstrichException("Snapshot trimmer received empty input" + get_diagnostic_context())
+    return version_str.split("-")[0]
 
-def nosnapshot(str):
-    if(not str):
-      raise OstrichException(f"'nosnapshot' fiter called with an undefined or empty input "+getCurrentLocation())  
-    return str.split("-")[0]
+def wrapped_basename(p): return os.path.basename(p)
+def wrapped_dirname(p): 
+    res = os.path.dirname(p)
+    return res if res else "."
 
-def basename(path):
-    return os.path.basename(path)
+def format_boolean(val):
+    if isinstance(val, bool):
+        return "true" if val else "false"
+    return val
 
-def dirname(path):
-    ret=os.path.dirname(path)
-    if ret=="":
-        ret="."
-    return ret
+def serialize_yaml(obj): return yaml.dump(obj)
 
-def bool_helper(b):
-    if isinstance(b, bool):
-        if(b):
-            return "true"
-        else:
-            return "false"
-    else:
-        return b
+def validate_min_version(current, required, label):
+    if not current:
+        raise OstrichException(f"Version missing for check at {label}")
+    if Version.parse(current) < Version.parse(required):
+        raise OstrichException(f"Requirement failed: {current} @ {label} is below minimum {required}")
+    return current
 
-def toYaml(data):
-    return yaml.dump(data)
+def validate_max_version(current, limit, label):
+    if not current:
+        raise OstrichException(f"Version missing for check at {label}")
+    if Version.parse(current) > Version.parse(limit):
+        raise OstrichException(f"Requirement failed: {current} @ {label} exceeds maximum {limit}")
+    return current
 
-
-def minVersion(version: string,versionToCheck: string,key: string) -> string:
-    if(not version):
-        raise OstrichException(f"Version not defined in {key}")
-
-    v1= Version.parse(version)
-    v2= Version.parse(versionToCheck)
-    if v1 < v2:
-        raise OstrichException(f"Version {version} defined in {key} must be greater than {versionToCheck}")
-    return version
-
-def maxVersion(version: string,versionToCheck: string,key: string) -> string:
-    if(not version):
-        raise OstrichException(f"Version not defined in {key}")
-
-    v1= Version.parse(version)
-    v2= Version.parse(versionToCheck)
-    if v1 > v2:
-        raise OstrichException(f"Version {version} defined in {key} must be lower than {versionToCheck}")
-    return version
-
-
-def toUnixPath(p):
-    if not p:
-        return p
-    p = os.path.abspath(p)
+def normalize_to_posix(path_val):
+    if not path_val: return path_val
+    abs_p = os.path.abspath(path_val)
     if os.name == 'nt':
-        drive, tail = os.path.splitdrive(p)
+        drive, body = os.path.splitdrive(abs_p)
         if drive:
-            res = "/" + drive[0].lower() + tail.replace('\\', '/')
-        else:
-            res = p.replace('\\', '/')
-        return res
-    return p.replace('\\', '/')
+            return "/" + drive[0].lower() + body.replace('\\', '/')
+    return abs_p.replace('\\', '/')
 
-
-def input_filter(value, input_name):
-    global configAll
-    # Use glom's default to avoid exception inside glom and handle it ourselves
-    key = f"template.params.input.{input_name}"
-    input_path = glom(configAll, key, default=None)
+def filter_input_mapping(subpath, key_name):
+    lookup = f"template.params.input.{key_name}"
+    mapped_base = glom(configAll, lookup, default=None)
+    if mapped_base is None:
+        raise OstrichException(f"Configuration key '{lookup}' specifically required but undefined")
     
-    if input_path is None:
-        # We raise the exception, but we don't log it manually.
-        # templateString will log it once at the end.
-        raise OstrichException(f"Cannot locate key {key} in config file")
-    
-    # This path is relative from the ostrich.yaml location (result of 'here' filter)
-    base = here(input_path)
-    
-    # Combine with the input value
-    if value:
-        return os.path.normpath(os.path.join(base, value)).replace("\\", "/")
-    return base
+    root_path = filter_resolve_local(mapped_base)
+    if subpath:
+        return os.path.normpath(os.path.join(root_path, subpath)).replace("\\", "/")
+    return root_path
 
-## Jinja2 globals
+def global_raise_error(reason):
+    raise OstrichException(reason)
 
-def raise_helper(msg):
-    raise OstrichException(msg)
-
-
-# Get the line number from the stack as suggested in:
-# https://stackoverflow.com/questions/71784095/how-to-get-current-line-of-source-file-when-processing-a-macro
-def getCurrentLineNo():
-    for frameInfo in stack():
-        if frameInfo.frame.f_globals.get("__jinja_template__") is not None:
-            template = frameInfo.frame.f_globals.get("__jinja_template__")
+def get_macro_lineno():
+    """Extracts the template line number where a macro or filter was invoked."""
+    target_frame = None
+    for info in stack():
+        if info.frame.f_globals.get("__jinja_template__"):
+            target_frame = info.frame.f_globals.get("__jinja_template__")
             break
-    return template.get_corresponding_lineno(currentframe().f_back.f_lineno)
+    if target_frame:
+        return target_frame.get_corresponding_lineno(currentframe().f_back.f_lineno)
+    return 0
 
-# Returns the current location in the template
-# if the template is the root one, it returns the line number
-# else it returns the template name and the line number (happens when we are in an included template)
-def getCurrentLocation():
-    template = None
-    for frameInfo in stack():
-        if frameInfo.frame.f_globals.get("__jinja_template__") is not None:
-            template = frameInfo.frame.f_globals.get("__jinja_template__")
+def get_diagnostic_context():
+    """Generates a string describing the current template location for errors."""
+    active_tpl = None
+    for info in stack():
+        if info.frame.f_globals.get("__jinja_template__"):
+            active_tpl = info.frame.f_globals.get("__jinja_template__")
             break
-    if template is None:
-        return ""
-    global jinja
-    if(template == jinja):
-        return " at line "+str(getCurrentLineNo())
+    if not active_tpl: return ""
+    
+    if active_tpl == global_jinja_template:
+        return " at line %d" % get_macro_lineno()
     else:
-        return "in "+str(template)+" at line "+str(template.get_corresponding_lineno(currentframe().f_back.f_lineno))
+        line = active_tpl.get_corresponding_lineno(currentframe().f_back.f_lineno)
+        return " in %s at line %d" % (active_tpl, line)
 
+def global_get_nested(path):
+    ctx = get_diagnostic_context()
+    pointer = configAll
+    chain = ""
+    for segment in path.split("."):
+        if pointer is None: return ""
+        chain += segment + "."
+        if segment not in pointer:
+            raise OstrichException(f"Nested property '{chain[:-1]}' is undefined{ctx}")
+        pointer = pointer[segment]
+    return pointer
 
-def get_helper(key):
-    loc=getCurrentLocation()
-    global configAll
-    ret=configAll
-    currentKey=""
-    for k in key.split("."):
-        if ret==None:
+def global_safe_get(path):
+    pointer = configAll
+    for segment in path.split("."):
+        if pointer is None or segment not in pointer:
             return ""
-        currentKey+=k+"."
-        if k not in ret:
-            raise OstrichException(f"Key {currentKey[:-1]} not defined {loc}")
-        ret=ret[k]
+        pointer = pointer[segment]
+    return pointer
 
-    return ret
-
-
-def safe_helper(key):
-    global configAll
-    ret=configAll
-    currentKey=""
-
-    for k in key.split("."):
-        if ret==None:
-            return ""
-        currentKey+=k+"."
-        if k not in ret:
-            return ""
-        ret=ret[k]
-    return ret
-
-def isDebugEnabled():
-    global configAll
+def check_debug_status():
     return configAll['_ostrich']['loglevel'] < logging.INFO
 
-## ----------------------------
+def fetch_env_var(name): return os.getenv(name)
 
-def env(str):
-    return os.getenv(str)
+def sub_render(text): return render_template_string(text, False)
 
-def render(str):
-    return templateString(str,False)
+def get_configuration_base():
+    return str(Path.home() / ".ostrich")
 
-def getConfigRoot():
-    return os.path.expanduser("~")+"/.ostrich"
+def get_tooling_config_path():
+    return get_configuration_base() + "/sdk-config"
 
-def getConfigDir():
-    return getConfigRoot()+"/sdk-config"
+def get_main_config_file():
+    return get_tooling_config_path() + "/config.yaml"
 
-def getConfigFile():
-    return getConfigDir()+"/config.yaml"
-
-def safeLoad(filename) -> dict:
-    if not os.path.isfile(filename):
+def read_yaml_safe(path_to_file) -> dict:
+    if not os.path.isfile(path_to_file):
         return {}
-    with open(filename, 'r+') as file:
-        ret = yaml.safe_load(file)
-        if ret==None:
-            return {}
-        return ret
+    with open(path_to_file, 'r') as stream:
+        data = yaml.safe_load(stream)
+        return data if data else {}
 
-def loadConf():
-    return safeLoad(getConfigFile())
+def load_system_config():
+    return read_yaml_safe(get_main_config_file())
 
-
-def filterDecorator(func):
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-def globalDecorator(func):
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
+def register_extensions(env_obj, is_main=True):
+    """Registers filters and globals for a Jinja environment."""
+    env_obj.filters.update({
+        'here': filter_resolve_local,
+        'noslash': filter_strip_slashes,
+        'md5hash': filter_md5,
+        'fromTemplate': filter_tpl_asset,
+        'fromTemplates': filter_global_asset,
+        'fromJob': filter_operation_asset,
+        'fromTemplateInstance': filter_instance_asset,
+        'nosnapshot': filter_strip_snapshot,
+        'basename': wrapped_basename,
+        'dirname': wrapped_dirname,
+        'bool': format_boolean,
+        'yaml': serialize_yaml,
+        'minVersion': validate_min_version,
+        'maxVersion': validate_max_version,
+        'toUnixPath': normalize_to_posix,
+        'input': filter_input_mapping
+    })
     
-    return wrapper
+    env_obj.globals.update({
+        'raise': global_raise_error,
+        'get': global_get_nested,
+        '_': global_safe_get,
+        'isDebugEnabled': check_debug_status,
+        'env': fetch_env_var
+    })
+    
+    # Add project-specific custom filters/globals if defined
+    if is_main:
+        env_obj.filters['render'] = sub_render
 
+def addFilter(name, func):
+    """Jinja2 filter registration hook."""
+    if jinja_environment:
+        jinja_environment.filters[name] = func
 
-def addFilter(name,func):
-    global e
-    if(name in e.filters):
-        raise OstrichException(f"Filter {name} already defined")
-    e.filters[name]=filterDecorator(func)
+def addGlobal(name, obj):
+    """Jinja2 global registration hook."""
+    if jinja_environment:
+        jinja_environment.globals[name] = obj
 
+def execute_jinja_rendering(template_body: str, context_data: dict, enable_recursive_render: bool = False):
+    global configAll, global_jinja_template, jinja_environment
+    configAll = context_data
 
-def addGlobal(name,func):
-    global e
-    if(name in e.globals):
-        raise OstrichException(f"Global {name} already defined")
-    e.globals[name]=globalDecorator(func)
+    jinja_environment = Environment(
+        block_start_string='[%',
+        block_end_string='%]',
+        variable_start_string='[[',
+        variable_end_string=']]',
+        comment_start_string='[#',
+        comment_end_string='#]',
+        loader=FileSystemLoader("/")
+    )
+    
+    register_extensions(jinja_environment, enable_recursive_render)
 
-
-def templateString(srcTemplate: string, filterRender: bool):
-    global configAll
-    global jinja
-    global e
-
-    e=Environment(block_start_string='[%',
-    block_end_string='%]',
-    variable_start_string='[[',
-    variable_end_string=']]',
-    comment_start_string='[#',
-    comment_end_string='#]',
-    loader=FileSystemLoader("/"))
-
-    e.filters['here']=here
-    e.filters['noslash']=noslash
-    e.filters['md5hash']=md5hash
-    e.filters['fromTemplate']=fromTemplate
-    e.filters['fromTemplates']=fromTemplates
-    e.filters['fromJob']=fromJob
-    e.filters['fromTemplateInstance']=fromTemplateInstance
-    e.filters['nosnapshot']=nosnapshot
-    e.filters['basename'] = basename
-    e.filters['dirname']  = dirname
-    e.filters['bool'] = bool_helper
-    e.filters['yaml'] = toYaml
-    e.filters['minVersion'] = minVersion
-    e.filters['maxVersion'] = maxVersion
-    e.filters['toUnixPath'] = toUnixPath
-    e.filters['input'] = input_filter
-
-    e.globals['raise']=raise_helper
-    e.globals['get']=get_helper
-    e.globals['_']=safe_helper
-    e.globals['isDebugEnabled']=isDebugEnabled
-    e.globals['env']=env
-
-    if(filterRender):
-      e.filters['render']=render
-
-    logging.debug(f"Execute {templateRoot()}/global/pretemplate.py")
-    with open(f"{templateRoot()}/global/pretemplate.py","r") as f:
-        code=f.read()
-        locals={}
-        locals['env']=e
-        try:
-            exec(code,globals(),locals)
-        except Exception as e:
-            logging.exception(e)
-            raise OstrichException(f"Error executing global pretemplate.py: {e}")
-
-    if os.path.exists(f"{configAll['_ostrich']['templateLocation']}/pretemplate.py"):
-        logging.debug(f"Execute {configAll['_ostrich']['templateLocation']}/pretemplate.py")
-        with open(f"{configAll['_ostrich']['templateLocation']}/pretemplate.py","r") as f:
-            code=f.read()
-            locals={}
-            locals['env']=e
+    # Execute system-wide pre-render logic
+    pre_sys = f"{get_bundled_template_base()}/global/pretemplate.py"
+    if os.path.exists(pre_sys):
+        logging.debug("Running system pre-hook: %s", pre_sys)
+        with open(pre_sys, "r") as ps:
+            script = ps.read()
+            # Provide symbols to the execution context
+            sandbox = {
+                "env": jinja_environment, 
+                "params": configAll,
+                "addFilter": addFilter,
+                "addGlobal": addGlobal
+            }
             try:
-                exec(code,globals(),locals)
-            except Exception as e:
-                logging.exception(e)
-                raise OstrichException(f"Error executing local pretemplate.py: {e}")
+                exec(script, globals(), sandbox)
+            except Exception as pre_err:
+                logging.exception(pre_err)
+                raise OstrichException(f"Global pre-render script failed: {pre_err}")
+
+    # Execute template-local pre-render logic
+    tpl_loc = configAll['_ostrich']['templateLocation']
+    pre_local = f"{tpl_loc}/pretemplate.py"
+    if os.path.exists(pre_local):
+        logging.debug("Running local pre-hook: %s", pre_local)
+        with open(pre_local, "r") as pl:
+            script = pl.read()
+            sandbox = {
+                "env": jinja_environment, 
+                "params": configAll,
+                "addFilter": addFilter,
+                "addGlobal": addGlobal
+            }
+            try:
+                exec(script, globals(), sandbox)
+            except Exception as loc_err:
+                logging.exception(loc_err)
+                raise OstrichException(f"Local pre-render script failed: {loc_err}")
 
     try:
-        jinja = e.from_string(srcTemplate)
-        return jinja.render(configAll)
-    except Exception as e:
-        msg=" ".join(e.args)
-        if(hasattr(e, 'filename') and e.filename!=None):
-            msg+=" in "+str(e.filename)  
-        if(hasattr(e, 'lineno')):
-            msg+=" at line "+str(e.lineno)
-        if(hasattr(e, 'name') and e.name!=None):
-            msg+=" ("+str(e.name)+")"  
-        if(hasattr(e, 'names') and e.names!=None):
-            msg+=" ("+str(e.names)+")"
-        raise OstrichException(f"Error rendering file {configAll['_ostrich']['currentfile']}: [{type(e).__name__}] {msg}")
+        global_jinja_template = jinja_environment.from_string(template_body)
+        return global_jinja_template.render(configAll)
+    except Exception as exc:
+        details = " ".join(map(str, exc.args))
+        if getattr(exc, 'filename', None): details += f" in {exc.filename}"
+        if getattr(exc, 'lineno', None): details += f" at line {exc.lineno}"
+        origin = configAll['_ostrich'].get('currentfile', 'unknown')
+        raise OstrichException(f"Rendering error in {origin}: [{type(exc).__name__}] {details}")
 
-
-def dict_merge(dct, merge_dct):
-    """ Recursive dict merge. Inspired by :meth:``dict.update()``, instead of
-    updating only top-level keys, dict_merge recurses down into dicts nested
-    to an arbitrary depth, updating keys. The ``merge_dct`` is merged into
-    ``dct``.
-    :param dct: dict onto which the merge is executed
-    :param merge_dct: dct merged into dct
-    :return: None
-    """
-    for k, v in merge_dct.items():
-        if (k in dct and isinstance(dct[k], dict) and isinstance(merge_dct[k], dict)):
-            dict_merge(dct[k], merge_dct[k])
+def deep_merge_dicts(base, overlay):
+    """Recursively merges dictionary values from overlay into base."""
+    for key, value in overlay.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            deep_merge_dicts(base[key], value)
         else:
-            dct[k] = merge_dct[k]
+            base[key] = value
 
-
-def getMergedConfig(inputDir: string, config: Any, params: Params):
+def build_merged_configuration(search_dir: str, user_config: Any, ctx: OstrichRuntimeContext):
     global configAll
-    configAll = config
-    templateConfig = {}
-    globalTemplateConfig = {}
+    configAll = user_config
+    configAll['_ostrich'] = {
+        'loglevel': ctx.loglevel,
+        'operation': "",
+        'tmpdir': ctx.tmpdir
+    }
 
-    configAll['_ostrich'] = {}
-    configAll['_ostrich']['loglevel']=params.loglevel
-    configAll['_ostrich']['operation']=""
-    configAll['_ostrich']['tmpdir']=params.tmpdir
-
-    if os.path.exists(inputDir+"/../global/config.yaml"):
-        logging.debug("Loading global config file %s/config.yaml",inputDir+"/../global")
-        with open(inputDir+"/../global/config.yaml") as f:
-            globalTemplateConfig = yaml.safe_load(f)
-
-    if os.path.exists(inputDir+"/config.yaml"):
-        logging.debug("Loading config file %s/config.yaml",inputDir)
-        with open(inputDir+"/config.yaml") as f:
-            templateConfig = yaml.safe_load(f)
-    else:
-        logging.debug("No config.yaml file found in %s",inputDir)
-
-    dict_merge(globalTemplateConfig,templateConfig)
-
-    defaults = {}
-    if os.path.exists(inputDir+"/default.yaml"):
-        logging.debug("Loading default file %s/default.yaml",inputDir)
-        with open(inputDir+"/default.yaml") as f:
-            content = f.read()
-        
-        jinja_env = Environment(
-            variable_start_string='[[',
-            variable_end_string=']]',
-        )
-        try:
-            templated_content = jinja_env.from_string(content).render(**configAll)
-        except Exception as e:
-            raise OstrichException(f"Error templating default.yaml in {inputDir}: {e}")
-            
-        defaults = yaml.safe_load(templated_content)
-        if defaults is None:
-            defaults = {}
-    else:
-        logging.debug("No default.yaml file found in %s",inputDir)
+    # Load multi-level metadata
+    levels = [
+        (f"{search_dir}/../global/config.yaml", "global shared"),
+        (f"{search_dir}/config.yaml", "template specific")
+    ]
     
-    # Merge configAll (user config) into defaults, so user overrides defaults
-    dict_merge(defaults, configAll)
-    configAll = defaults    
-    params.parsedPluginConfig = configAll
+    meta_accum = {}
+    for path, desc in levels:
+        if os.path.exists(path):
+            logging.debug("Loading %s metadata from %s", desc, path)
+            with open(path) as f:
+                deep_merge_dicts(meta_accum, yaml.safe_load(f))
 
-    configAll['_ostrich']['sdkconfig']=globalTemplateConfig
-    configAll['_ostrich']['templateLocation']=getTemplatePath(params.getPluginConf("template.kind"))
-    configAll['_ostrich']['templateRoot']=templateRoot()
-    configAll['_ostrich']['localconfig']=safeLoad(getConfigFile())
+    # Load and template default values
+    defaults = {}
+    default_path = f"{search_dir}/default.yaml"
+    if os.path.exists(default_path):
+        logging.debug("Processing defaults: %s", default_path)
+        with open(default_path) as f:
+            raw_defaults = f.read()
+        
+        tpl_engine = Environment(variable_start_string='[[', variable_end_string=']]')
+        try:
+            ready_defaults = tpl_engine.from_string(raw_defaults).render(**configAll)
+            defaults = yaml.safe_load(ready_defaults) or {}
+        except Exception as def_err:
+            raise OstrichException(f"Defaults templating failed in {search_dir}: {def_err}")
+
+    # Final prioritization: User Config > Defaults
+    deep_merge_dicts(defaults, configAll)
+    configAll = defaults
+    ctx.parsedPluginConfig = configAll
+
+    # Populate final internal context
+    configAll['_ostrich'].update({
+        'sdkconfig': meta_accum,
+        'templateLocation': locate_template_directory(ctx.fetch_plugin_setting("template.kind")),
+        'templateRoot': get_bundled_template_base(),
+        'localconfig': load_system_config()
+    })
     
     return configAll
 
-def template(inputDir: string, config: Any, params: Params,operation):
-
-    logging.debug(f"Templating {inputDir}")
+def process_template_suite(source_dir: str, config_bundle: Any, ctx: OstrichRuntimeContext, action_callback):
+    """Walks through a template directory and applies the specified action to each file."""
+    logging.debug("Initiating template suite processing for %s", source_dir)
     
-    configAll = getMergedConfig(inputDir, config, params)
-    configAll['_ostrich']['operation']=operation
+    global configAll
+    configAll = build_merged_configuration(source_dir, config_bundle, ctx)
+    
+    base_tpl_path = locate_template_directory(ctx.fetch_plugin_setting("template.kind"))
+    
+    for current_dir, subdirs, files in os.walk(source_dir):
+        relative_path = os.path.relpath(current_dir, base_tpl_path)
+        relative_path = "" if relative_path == "." else relative_path.replace("\\", "/")
+        
+        if relative_path.startswith("_"):
+            continue # Metadata directories
+            
+        configAll['_ostrich']['operation'] = relative_path.split("/")[0]
 
-    templatePathPrefix = getTemplatePath(params.getPluginConf("template.kind"))
-    for subdir, dirs, files in os.walk(inputDir):
-      logging.debug("Process subdir %s",subdir)
-      dstdir = os.path.relpath(subdir, templatePathPrefix)
-      if dstdir == ".":
-          dstdir = ""
-      dstdir = dstdir.replace("\\", "/") # Ensure forward slashes for consistency
-      logging.debug("Destination dir %s",dstdir)
-
-      # Skip test operation
-      if dstdir.startswith("_"):
-        logging.debug("Skip meta dir %s",dstdir)
-      else:
-        # The subdir is the absolute path to the template
-        # we need the job, so we calculate the relative path from the template root
-        # The first segment of this path is the operation
-        configAll['_ostrich']['operation']=dstdir.split("/")[0]
-
-        logging.debug("Operation %s",configAll['_ostrich']['operation'])
-
-        for file in files:
-            logging.debug("Process file %s",file)
-            configAll['_ostrich']['currentfile']=file
-
-            srcTemplateFile=subdir+"/"+file
-            srcTemplate : string
-
-            if(os.path.splitext(file)[1]==".tmpl"):
-
-                with open(srcTemplateFile,'r') as f:
-                    srcTemplate = f.read()
-
-                template=templateString(srcTemplate,True)
-
+        for entry in files:
+            configAll['_ostrich']['currentfile'] = entry
+            full_src = f"{current_dir}/{entry}"
+            
+            if entry.endswith(".tmpl"):
+                with open(full_src, 'r') as f:
+                    content = f.read()
+                rendered = render_template_string(content, True)
+                
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug ("====== Templated resource ============")
-                    logging.debug("Source file = %s",file)
-                    print(template)
-                    logging.debug ("======================================")
-
-                operation(template,dstdir+"/"+os.path.splitext(file)[0],params)
+                    print(f"--- Render result for {entry} ---\n{rendered}\n--- End ---")
+                
+                action_callback(rendered, f"{relative_path}/{entry[:-5]}", ctx)
             else:
                 try:
-                    with open(srcTemplateFile,'r') as f:
-                        srcTemplate = f.read()
-                    logging.debug("Copy file %s",file)
-                    operation(srcTemplate,dstdir+"/"+file,params)
-
+                    with open(full_src, 'r') as f:
+                        content = f.read()
+                    action_callback(content, f"{relative_path}/{entry}", ctx)
                 except UnicodeDecodeError:
+                    # Binary file fallback
+                    target_abs = Path(ctx.tmpdir) / relative_path
+                    target_abs.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(full_src, target_abs / entry)
 
-                    dstdirAbs=os.path.abspath(params.tmpdir+"/"+dstdir)
+# Compatibility helpers
+def setLocation(p): define_working_location(p)
+def getLocation(): return fetch_working_location()
+def root(): return get_binary_root()
+def extraTemplateRoot(): return get_custom_template_base()
+def templateRoot(): return get_bundled_template_base()
+def testTemplateRoot(): return get_testing_template_base()
+def getTemplatePath(i): return locate_template_directory(i)
+def getConfigRoot(): return get_configuration_base()
+def getConfigDir(): return get_tooling_config_path()
+def getConfigFile(): return get_main_config_file()
+def safeLoad(p): return read_yaml_safe(p)
+def loadConf(): return load_system_config()
+def template(d, c, p, o): return process_template_suite(d, c, p, o)
+def helm(*args): return execute_helm_command(*args)
+def templateString(t, c): return execute_jinja_rendering(t, c)
+def getMergedConfig(d, c, p): return build_merged_configuration(d, c, p)
+def toUnixPath(p): return normalize_to_posix(p)
 
-                    logging.debug("Copy binary file %s => %s",srcTemplateFile,dstdirAbs)
+def input_filter(val, key):
+    """Path resolution filter for template inputs."""
+    loc = fetch_working_location()
+    try:
+        # Resolve config path: template.params.input.<key>
+        lookup_path = f"template.params.input.{key}"
+        cfg_val = glom(configAll, lookup_path)
+        
+        # Construct absolute path
+        parts = [loc]
+        if cfg_val: parts.append(cfg_val)
+        if val: parts.append(val)
+        
+        return os.path.normpath(os.path.join(*parts)).replace("\\", "/")
+    except Exception:
+        raise OstrichException(f"Error in 'input' filter for '{key}'")
 
-                    os.makedirs(dstdirAbs,exist_ok=True)
-                    shutil.copy(srcTemplateFile,dstdirAbs+"/"+file)
+# Helper alias for external usage
+def template(inputDir, config, params, operation):
+    return process_template_suite(inputDir, config, params, operation)
 
-
-
-
-
-def helm_env_for_ost(base_dir: Path) -> dict:
-    """
-    Retourne un environnement isolé pour Helm (config/cache/data)
-    utilisé uniquement par ost.
-    """
+def get_isolated_helm_context(root: Path) -> dict:
+    """Returns an environment configuration that isolates Helm storage paths."""
     return {
         **os.environ,
-        "HELM_CONFIG_HOME": str(base_dir / "config"),
-        "HELM_CACHE_HOME":  str(base_dir / "cache"),
-        "HELM_DATA_HOME":   str(base_dir / "data"),
+        "HELM_CONFIG_HOME": str(root / "config"),
+        "HELM_CACHE_HOME":  str(root / "cache"),
+        "HELM_DATA_HOME":   str(root / "data"),
     }
 
-def helm(*args: str) -> None:
-    if shutil.which("helm") is None:
-        raise OstrichException("helm binary not found")
+def execute_helm_command(*args):
+    """Executes a helm command within an isolated environment."""
+    if not shutil.which("helm"):
+        raise OstrichException("Executable 'helm' not found in system path")
 
-    base_path = Path(getConfigRoot()) / "helm"
-    env = helm_env_for_ost(base_path)
+    storage_root = Path(get_configuration_base()) / "helm"
+    env_vars = get_isolated_helm_context(storage_root)
 
-    # Crée les répertoires si nécessaires
-    for key in ("HELM_CONFIG_HOME", "HELM_CACHE_HOME", "HELM_DATA_HOME"):
-        Path(env[key]).mkdir(parents=True, exist_ok=True)
+    for path_key in ["HELM_CONFIG_HOME", "HELM_CACHE_HOME", "HELM_DATA_HOME"]:
+        Path(env_vars[path_key]).mkdir(parents=True, exist_ok=True)
 
-    result = subprocess.run(
-        ["helm", *args],
-        env=env,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise OstrichException(f"Error executing helm {' '.join(args)}")
+    proc = subprocess.run(["helm", *args], env=env_vars, check=False)
+    if proc.returncode != 0:
+        raise OstrichException("Helm execution error for arguments: %s" % " ".join(args))
