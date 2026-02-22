@@ -19,7 +19,6 @@ echo "> Starting SSHD"
 if [ ! "$(ls -A /etc/ssh)" ]; then
     cp -a /etc/ssh.cache/* /etc/ssh/
 fi
-
 set_hostkeys() {
     printf '%s\n' \
         'set /files/etc/ssh/sshd_config/HostKey[1] /etc/ssh/keys/ssh_host_rsa_key' \
@@ -146,6 +145,21 @@ else
     if [ ! -e ~/.ssh/authorized_keys ] && [ ! "$(ls -A /etc/authorized_keys)" ]; then
         echo "WARNING: No SSH authorized_keys found!"
     fi
+fi
+
+# Install trusted certificates from user homes
+CERTS_UPDATED=false
+for cert_dir in /home/*/.certs; do
+    if [ -d "$cert_dir" ] && [ "$(ls -A "$cert_dir" 2>/dev/null)" ]; then
+        echo ">> Installing trusted certificates from $cert_dir"
+        mkdir -p /usr/local/share/ca-certificates
+        cp -rn "$cert_dir"/* /usr/local/share/ca-certificates/ 2>/dev/null || true
+        CERTS_UPDATED=true
+    fi
+done
+
+if [ "$CERTS_UPDATED" = "true" ]; then
+    update-ca-certificates
 fi
 
 # Unlock root account, if enabled

@@ -76,8 +76,27 @@ func toUnixPath(path string) string {
 	return "/" + drive + filepath.ToSlash(rest)
 }
 
+type mapping struct {
+	host      string
+	container string
+}
+
+func addMapping(mappings *[]mapping, host, container string) {
+	*mappings = append(*mappings, mapping{host: host, container: container})
+}
+
+func mountVolume(dockerRunArgs *[]string, mappings *[]mapping, host, container string, options ...string) {
+	val := fmt.Sprintf("%s:%s", host, container)
+	if len(options) > 0 {
+		val += ":" + strings.Join(options, ",")
+	}
+	*dockerRunArgs = append(*dockerRunArgs, "-v", val)
+	addMapping(mappings, host, container)
+}
+
 func main() {
 	home, _ := os.UserHomeDir()
+	var err error
 	imageFile := filepath.Join(home, ".ostrich", "image")
 
 	if data, err := os.ReadFile(imageFile); err == nil {
@@ -166,12 +185,15 @@ func main() {
 	}
 	slog.Debug(fmt.Sprintf("Final docker image: %s", image))
 
+	var mappings []mapping
+
 	pwd, _ := os.Getwd()
 	unixPwd := toUnixPath(pwd)
 
 	entrypoint := "/sdk/ost"
 	workdir := unixPwd
-	dataVolumes := []string{"-v", fmt.Sprintf("%s:%s", pwd, unixPwd)}
+
+	addMapping(&mappings, pwd, unixPwd)
 
 	// Handle Windows-style output paths for -o option
 	if runtime.GOOS == "windows" {
@@ -183,7 +205,7 @@ func main() {
 					absPath, err := filepath.Abs(outputPath)
 					if err == nil {
 						wslPath := toUnixPath(absPath)
-						dataVolumes = append(dataVolumes, "-v", fmt.Sprintf("%s:%s", absPath, wslPath))
+						addMapping(&mappings, absPath, wslPath)
 						ostArgs[i+1] = wslPath
 						slog.Debug(fmt.Sprintf("Windows output path detected: %s -> %s (mounted)", outputPath, wslPath))
 					}
@@ -228,7 +250,7 @@ func main() {
 		entrypoint = "bash"
 		ostArgs = ostArgs[1:]
 		workdir = "/sdk"
-		dataVolumes = nil
+		mappings = nil
 	}
 	ostrichDockerDir := filepath.Join(home, ".ostrich", "docker")
 
@@ -238,8 +260,6 @@ func main() {
 	for _, f := range folders {
 		os.MkdirAll(filepath.Join(ostrichDockerDir, f), 0755)
 	}
-
-	// No longer extracting templates from image to host as they are built-in
 
 	// TTY detection
 	var interactive []string
@@ -260,23 +280,50 @@ func main() {
 
 	dockerRunArgs := []string{"run", "--rm"}
 	dockerRunArgs = append(dockerRunArgs, interactive...)
-	dockerRunArgs = append(dockerRunArgs, "-v", "/var/run/docker.sock:/var/run/docker.sock")
+	addMapping(&mappings, "/var/run/docker.sock", "/var/run/docker.sock")
 
-	if dataVolumes != nil {
-		dockerRunArgs = append(dockerRunArgs, dataVolumes...)
+	for _, m := range mappings {
+		dockerRunArgs = append(dockerRunArgs, "-v", fmt.Sprintf("%s:%s", m.host, m.container))
 	}
 
 	dockerRunArgs = append(dockerRunArgs, envVars...)
+	dockerRunArgs = append(dockerRunArgs, "-w", workdir)
+
+	mountVolume(&dockerRunArgs, &mappings, filepath.Join(home, ".kube", "config"), "/kubeconfig")
+	mountVolume(&dockerRunArgs, &mappings, ostrichDockerDir, "/sdk/.ostrich")
+	addMapping(&mappings, ostCoreDir, "/sdk")
+
 	dockerRunArgs = append(dockerRunArgs,
-		"-w", workdir,
-		"-v", fmt.Sprintf("%s/.kube/config:/kubeconfig", home),
 		"-e", "KUBECONFIG=/kubeconfig",
 		"-e", "HOME=/sdk",
 		"-e", "OST_WORKSPACE="+unixPwd,
 		"-e", "OST_SDK_HOST_PATH="+unixTop,
 		"-e", "OST_HOME_HOST_PATH="+unixHome,
-		"-v", fmt.Sprintf("%s:%s", ostrichDockerDir, "/sdk/.ostrich"),
 	)
+
+	// Pass docker config if it exists
+	dockerConfig := filepath.Join(home, ".docker", "config.json")
+	if _, err := os.Stat(dockerConfig); err == nil {
+		mountVolume(&dockerRunArgs, &mappings, dockerConfig, "/sdk/.docker/config.json", "ro")
+	}
+
+	// Mount SSL certificates for certificate verification
+	if _, err := os.Stat("/etc/ssl/certs"); err == nil {
+		mountVolume(&dockerRunArgs, &mappings, "/etc/ssl/certs", "/etc/ssl/certs", "ro")
+	}
+
+	// Write volumes.yaml
+	volumesFile := filepath.Join(ostrichDockerDir, "volumes.yaml")
+	var b strings.Builder
+	for _, m := range mappings {
+		fmt.Fprintf(&b, "- host: %q\n  container: %q\n", m.host, m.container)
+	}
+	err = os.WriteFile(volumesFile, []byte(b.String()), 0644)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Error writing volumes.yaml: %v", err))
+	} else {
+		dockerRunArgs = append(dockerRunArgs, "-v", fmt.Sprintf("%s:/ostrich-volumes.yaml", volumesFile))
+	}
 
 	// Linux specific UID/GID
 	if runtime.GOOS == "linux" {
@@ -312,7 +359,7 @@ func main() {
 	runCmd.Stdout = os.Stdout
 	runCmd.Stderr = os.Stderr
 
-	err := runCmd.Run()
+	err = runCmd.Run()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())

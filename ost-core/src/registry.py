@@ -133,7 +133,10 @@ def registry(params: Params):
         else:
             registry_url = registry_url.split("/", 1)[0]
 
-        util.helm("registry", "login", registry_url)
+        helm_args = ["registry", "login", registry_url]
+        if params.skipTlsVerify:
+            helm_args.append("--insecure")
+        util.helm(*helm_args)
     elif sub_op == "logout":
         if len(params.operationParams) < 2:
             registryUsage()
@@ -163,7 +166,10 @@ def registry(params: Params):
         else:
             registry_url = registry_url.split("/", 1)[0]
 
-        util.helm("registry", "logout", registry_url)
+        helm_args = ["registry", "logout", registry_url]
+        if params.skipTlsVerify:
+            helm_args.append("--insecure")
+        util.helm(*helm_args)
     elif sub_op == "add":
         args = params.operationParams[1:]
         force = params.forceTmpDir
@@ -384,13 +390,25 @@ def search(params: Params):
 
         # Process found repositories
         for repo_name in sorted(list(set(repo_names))):
-            # Display name should be relative to the registry path if possible
-            display_name = repo_name
-            if path and repo_name.startswith(path):
-                display_name = repo_name[len(path):].lstrip("/")
-            elif path and repo_name.startswith(f"{hostname}/{path}"):
-                # Some registries return the full hostname in the catalog
-                display_name = repo_name[len(f"{hostname}/{path}"):].lstrip("/")
+            # If a path is configured for the registry, the repository must be within that path
+            display_name = None
+            if path:
+                if repo_name == path:
+                    display_name = ""
+                elif repo_name.startswith(path + "/"):
+                    display_name = repo_name[len(path):].lstrip("/")
+                elif repo_name == f"{hostname}/{path}":
+                    display_name = ""
+                elif repo_name.startswith(f"{hostname}/{path}/"):
+                    display_name = repo_name[len(f"{hostname}/{path}"):].lstrip("/")
+                
+                if display_name is None:
+                    # Skip repositories outside the configured path
+                    continue
+            else:
+                display_name = repo_name
+
+            full_display_name = f"{reg['name']}/{display_name}" if display_name else reg['name']
 
             tags_url = f"{parsed.scheme}://{hostname}/v2/{repo_name}/tags/list"
             tags_resp = oci_request(tags_url, auth)
@@ -399,24 +417,24 @@ def search(params: Params):
                 if tags:
                     if show_all_versions:
                         for t in tags:
-                            print(f"- {reg['name']}/{display_name}:{t}")
+                            print(f"- {full_display_name}:{t}")
                             found = True
                     else:
                         try:
                             valid_tags = [t for t in tags if t]
                             if valid_tags:
                                 latest = sorted(valid_tags, key=version.parse)[-1]
-                                print(f"- {reg['name']}/{display_name}:{latest}")
+                                print(f"- {full_display_name}:{latest}")
                                 found = True
                         except Exception:
                             latest = sorted(tags)[-1]
-                            print(f"- {reg['name']}/{display_name}:{latest}")
+                            print(f"- {full_display_name}:{latest}")
                             found = True
                 else:
-                    print(f"- {reg['name']}/{display_name}")
+                    print(f"- {full_display_name}")
                     found = True
             else:
-                print(f"- {reg['name']}/{display_name}")
+                print(f"- {full_display_name}")
                 found = True
     
     if not found:
