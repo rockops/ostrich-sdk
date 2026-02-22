@@ -156,7 +156,10 @@ def testUsage():
 
 
 def installTemplateFromDir(name, sourceDir, link=False, source=None):
-    target=util.extraTemplateRoot()+"/"+name
+    if not name or name in [".", ".."]:
+        raise OstrichException(f"Invalid template name: {name}")
+    
+    target = os.path.join(util.extraTemplateRoot(), name)
     logging.debug("Target=%s",target)
     if(os.path.lexists(target)):
         if os.path.islink(target):
@@ -430,11 +433,15 @@ def template(params: util.Params):
             idx += 1
         
         if install_dir:
-             name = install_dir.rstrip("/")
-             logging.info(f"Installing template {name}")
-             if not os.path.isdir(name):
-                 raise OstrichException(f"{name} does not exist or is not a directory")
-             installTemplateFromDir(os.path.basename(name), name, link)
+             if not os.path.isdir(install_dir):
+                 raise OstrichException(f"{install_dir} does not exist or is not a directory")
+             
+             # Extract the template name from the directory path
+             # Use abspath to correctly handle "." or paths ending with a slash
+             name = os.path.basename(os.path.abspath(install_dir))
+             logging.info(f"Installing template {name} from {install_dir}")
+             
+             installTemplateFromDir(name, install_dir, link)
         else:
             if not registry_arg:
                  templateUsage()
@@ -504,16 +511,25 @@ def template(params: util.Params):
             templateUsage()
             raise OstrichException("Invalid number of parameters")
         name = args[1]
-        logging.info(f"Delete template {name}")
 
-        target=util.extraTemplateRoot()+"/"+os.path.basename(name)
-        if os.path.lexists(target):
-            if os.path.islink(target):
-                os.unlink(target)
+        try:
+            target = util.getTemplatePath(name)
+            if not target.startswith(util.extraTemplateRoot()):
+                logging.warning(f"Template {name} is a builtin or test template and cannot be deleted")
+                return
+            
+            template_id = os.path.basename(target)
+            logging.info(f"Delete template {template_id}")
+
+            if os.path.lexists(target):
+                if os.path.islink(target):
+                    os.unlink(target)
+                else:
+                    shutil.rmtree(target)
             else:
-                shutil.rmtree(target)
-        else:
-            logging.warning("Template does not exist or is not a custom template")
+                logging.warning("Template does not exist")
+        except OstrichException:
+            logging.warning(f"Template {name} does not exist")
 
     elif sub == "package":
         package(params)

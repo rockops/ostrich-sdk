@@ -216,14 +216,34 @@ def testTemplateRoot():
 
 def getTemplatePath(tpl: string):
     tpl_str = str(tpl)
-    ret=templateRoot()+"/"+tpl_str
-    if os.path.isdir(ret) == False:
-        ret=testTemplateRoot()+"/"+tpl_str
-        if os.path.isdir(ret) == False:
-            ret=extraTemplateRoot()+"/"+tpl_str
-            if os.path.isdir(ret) == False:
-                raise OstrichException(f"Template {tpl_str} does not exist")
-    return ret
+    roots = [templateRoot(), testTemplateRoot(), extraTemplateRoot()]
+    
+    # 1. Try direct match by directory name
+    for root in roots:
+        ret = os.path.join(root, tpl_str)
+        if os.path.isdir(ret):
+            return ret
+            
+    # 2. Try match by business name in template.yaml
+    for root in roots:
+        if not os.path.exists(root):
+            continue
+        for t in os.listdir(root):
+            if t == "global":
+                continue
+            path = os.path.join(root, t)
+            if os.path.isdir(path):
+                yaml_path = os.path.join(path, "template.yaml")
+                if os.path.exists(yaml_path):
+                    try:
+                        with open(yaml_path, 'r') as f:
+                            config = yaml.safe_load(f)
+                            if config and config.get('name') == tpl_str:
+                                return path
+                    except Exception:
+                        pass
+
+    raise OstrichException(f"Template {tpl_str} does not exist")
 
 
 def setLocation(str):
@@ -608,7 +628,20 @@ def getMergedConfig(inputDir: string, config: Any, params: Params):
     if os.path.exists(inputDir+"/default.yaml"):
         logging.debug("Loading default file %s/default.yaml",inputDir)
         with open(inputDir+"/default.yaml") as f:
-            defaults = yaml.safe_load(f)
+            content = f.read()
+        
+        jinja_env = Environment(
+            variable_start_string='[[',
+            variable_end_string=']]',
+        )
+        try:
+            templated_content = jinja_env.from_string(content).render(**configAll)
+        except Exception as e:
+            raise OstrichException(f"Error templating default.yaml in {inputDir}: {e}")
+            
+        defaults = yaml.safe_load(templated_content)
+        if defaults is None:
+            defaults = {}
     else:
         logging.debug("No default.yaml file found in %s",inputDir)
     

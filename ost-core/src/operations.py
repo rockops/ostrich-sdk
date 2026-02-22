@@ -262,6 +262,60 @@ def container(operation: string, params: util.Params):
     dockerCommand.append("-v")
     dockerCommand.append("/var/run/docker.sock:/var/run/docker.sock")
 
+    # Support for specifying a custom network (e.g. host)
+    network = params.getPluginConf("template.network", None)
+    if network:
+        dockerCommand.append("--network")
+        dockerCommand.append(network)
+
+    # Mount host's Docker configuration to share registry credentials
+    docker_config = os.path.join(os.path.expanduser("~"), ".docker", "config.json")
+    if os.path.isfile(docker_config):
+        # We mount it to the user's home in the container. 
+        # Since we often run with --user UID:GID, we should try to put it where the container's user expects it.
+        # For buildpacks/pack and many others, /root/.docker/config.json or $HOME/.docker/config.json is standard.
+        container_home = "/root" # Default if running as root
+        if params.getPluginConf("runner.user", None) or hasattr(os, 'getuid'):
+            # If not root, we don't know the container home for sure, but many images use /home/cnb or similar.
+            # However, most tools also look at DOCKER_CONFIG env var.
+            env["DOCKER_CONFIG"] = "/.docker"
+            dockerCommand.append("-v")
+            dockerCommand.append(f"{getHostPath(docker_config)}:/.docker/config.json:ro")
+        else:
+            dockerCommand.append("-v")
+            dockerCommand.append(f"{getHostPath(docker_config)}:/root/.docker/config.json:ro")
+
+    # Add host's hosts file entries to the container for portability.
+    # Using --add-host is more robust than bind-mounting /etc/hosts as it ensures
+    # the entries are also available via Docker's internal DNS (127.0.0.11),
+    # which is required by some resolvers (like Go's) in minimal containers.
+    # This also populates the container's /etc/hosts file with these entries.
+    hosts_file = "/etc/hosts"
+    if os.name == 'nt':
+        hosts_file = os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32\\drivers\\etc\\hosts')
+    
+    if os.path.isfile(hosts_file):
+        try:
+            added_hosts = set()
+            with open(hosts_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        ip = parts[0]
+                        # Basic check for an IP address (IPv4 or IPv6)
+                        if any(c in '0123456789.:' for c in ip) and all(c in '0123456789.:abcdefABCDEF' for c in ip):
+                            for name in parts[1:]:
+                                if name.lower() not in ['localhost', 'ip6-localhost', 'ip6-loopback', 'ip6-allnodes', 'ip6-allrouters']:
+                                    if (name, ip) not in added_hosts:
+                                        dockerCommand.append("--add-host")
+                                        dockerCommand.append(f"{name}:{ip}")
+                                        added_hosts.add((name, ip))
+        except Exception as e:
+            logging.warning(f"Failed to parse host's hosts file: {e}")
+
     dockerCommand.append("-w")
     dockerCommand.append(toContainerPath(location))
 
