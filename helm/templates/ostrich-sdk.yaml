@@ -18,8 +18,8 @@ spec:
       containers:
       - name: sdk
         image: "{{ (index .Values "ostrich-sdk").registry }}/{{ (index .Values "ostrich-sdk").image }}:{{ (index .Values "ostrich-sdk").imageTag | default .Chart.Version }}"
-        # securityContext: 
-        #     privileged: true 
+        securityContext: 
+            privileged: true 
         imagePullPolicy: {{ (index .Values "ostrich-sdk").imagePullPolicy }}
         env:
         - name: SSH_USERS
@@ -43,45 +43,20 @@ spec:
           mountPath: /etc/authorized_keys
         - name: keys-ssh
           mountPath: /etc/ssh/keys
-        - name: var-run 
-          mountPath: /var/run
+
         # - name: root-pvc
         #   mountPath: /data/dmp
         - name: ident
           mountPath: /sdk/id
-
-
-      - name: dind-daemon 
-        image: {{ .Values.docker.registry }}/{{ .Values.docker.image }}:{{ .Values.docker.imageTag }}
-        imagePullPolicy: {{ .Values.docker.imagePullPolicy }}
-        resources: 
-            requests: 
-                cpu: 20m 
-                memory: 512Mi 
-        securityContext: 
-            privileged: true 
-        volumeMounts: 
-          - name: docker-data 
-            mountPath: /var/lib/docker
-          - name: var-run 
-            mountPath: /var/run
-          - name: docker-config
-            mountPath: /etc/docker/daemon.json
-            subPath: daemon.json
-
-      {{- /*
-      - name: kubectl-proxy
-        image: {{ .Values.global.imagerepository.private }}{{ .Values.service.kubectl }}
-        command:
-        - kubectl
-        - proxy
-        - --port=8080
-      */}}
+        - name: docker-data 
+          mountPath: /var/lib/docker
+        - name: docker-config
+          mountPath: /etc/docker/daemon.json
+          subPath: daemon.json
 
 
       volumes: 
-      - name: var-run 
-        emptyDir: {}
+
 
       - name: docker-config
         configMap:

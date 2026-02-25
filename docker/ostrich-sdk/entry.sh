@@ -8,6 +8,12 @@ DAEMON=sshd
 
 echo "> Starting SSHD"
 
+echo ">> Starting Docker daemon"
+# Clean up any old pid files
+rm -f /var/run/docker.pid
+dockerd > /var/log/dockerd.log 2>&1 &
+DOCKER_PID=$!
+
 # Propagate environment variables to SSH sessions
 {
     for var in $(printenv | grep -E '^(KUBERNETES_|DOCKER_|OSTRICH_|HARBOR_)' | cut -d= -f1); do
@@ -162,6 +168,19 @@ if [ "$CERTS_UPDATED" = "true" ]; then
     update-ca-certificates
 fi
 
+# Rebuild /etc/hosts from user .hosts files
+if [ ! -f /etc/hosts.sdk.bak ]; then
+    cp /etc/hosts /etc/hosts.sdk.bak
+fi
+
+cp /etc/hosts.sdk.bak /etc/hosts
+for hosts_file in /home/*/.hosts; do
+    if [ -f "$hosts_file" ]; then
+        echo ">> Adding hosts from $hosts_file"
+        cat "$hosts_file" >> /etc/hosts
+    fi
+done
+
 # Unlock root account, if enabled
 if [[ "${SSH_ENABLE_ROOT}" == "true" ]]; then
     echo ">> Unlocking root account"
@@ -266,13 +285,15 @@ for f in /etc/entrypoint.d/*; do
 done
 
 stop() {
-    echo "Received SIGINT or SIGTERM. Shutting down $DAEMON"
+    echo "Received SIGINT or SIGTERM. Shutting down $DAEMON and dockerd"
     # Get PID
     local pid=$(cat /var/run/$DAEMON/$DAEMON.pid)
     # Set TERM
     kill -SIGTERM "${pid}"
+    [ -n "$DOCKER_PID" ] && kill -SIGTERM "$DOCKER_PID"
     # Wait for exit
     wait "${pid}"
+    [ -n "$DOCKER_PID" ] && wait "$DOCKER_PID"
     # All done.
     echo "Done."
 }

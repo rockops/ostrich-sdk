@@ -18,7 +18,7 @@ func main() {
 	verbs := map[string]bool{
 		"init": true, "endpoint": true, "ep": true, "ssh": true,
 		"put": true, "docker": true, "kubectl": true, "version": true,
-		"run": true, "help": true, "cert": true,
+		"run": true, "help": true, "cert": true, "host": true,
 	}
 
 	var command string
@@ -100,6 +100,8 @@ func main() {
 		cmdRun(args)
 	case "cert":
 		cmdCert(args)
+	case "host":
+		cmdHost(args)
 	case "help", "-h", "--help":
 		help()
 	default:
@@ -163,5 +165,6 @@ func help() {
 	fmt.Println("  kubectl     : run kubectl command")
 	fmt.Println("  run [-f config] <task>  : sync input folder and run task remotely")
 	fmt.Println("  cert install <file>     : install a trusted certificate remotely")
+	fmt.Println("  host <name> <ip>        : add a host entry remotely")
 	fmt.Println("  version                 : show version")
 }

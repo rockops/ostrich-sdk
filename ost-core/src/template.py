@@ -390,10 +390,27 @@ def template(params: util.Params):
         describePretty(name)
         print("")
         print("Available tasks:")
-        for t in os.listdir(templatePath):
-            if os.path.isdir(templatePath + "/" + t):
-                if os.path.isfile(templatePath + "/" + t + "/" + t + ".py.tmpl"):
+        for t in sorted(os.listdir(templatePath)):
+            task_dir = os.path.join(templatePath, t)
+            if os.path.isdir(task_dir):
+                if os.path.isfile(os.path.join(task_dir, f"{t}.py.tmpl")) or os.path.isfile(os.path.join(task_dir, f"{t}.yaml.tmpl")):
                     print("- " + t)
+                    desc_path = os.path.join(task_dir, "description.md")
+                    if os.path.isfile(desc_path):
+                        try:
+                            # Try to use glow for pretty printing
+                            if run(['glow', '--version'], capture_output=True).returncode == 0:
+                                run(['glow', desc_path])
+                            else:
+                                with open(desc_path, 'r') as f:
+                                    print("  " + f.read().replace('\n', '\n  ').strip())
+                        except Exception:
+                            try:
+                                with open(desc_path, 'r') as f:
+                                    print("  " + f.read().replace('\n', '\n  ').strip())
+                            except Exception:
+                                pass
+                        print("")
 
     elif sub == "config":
         if len(args) < 2:

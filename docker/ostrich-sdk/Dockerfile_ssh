@@ -3,7 +3,8 @@ FROM ostrich-sdk:$TAG
 
 # Setup SSH and required config tools
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server augeas-tools && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-server augeas-tools \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin && \
     mkdir -p /run/sshd && \
     mkdir -p ~root/.ssh /etc/authorized_keys && chmod 700 ~root/.ssh/ && \
     augtool 'set /files/etc/ssh/sshd_config/AuthorizedKeysFile ".ssh/authorized_keys /etc/authorized_keys/%u"' && \
