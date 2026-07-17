@@ -547,10 +547,11 @@ def templateString(srcTemplate: str, filterRender: bool):
     logging.debug(f"Execute {templateRoot()}/global/pretemplate.py")
     with open(f"{templateRoot()}/global/pretemplate.py","r") as f:
         code=f.read()
+        exec_globals = globals().copy()
         locals={}
         locals['env']=e
         try:
-            exec(code,globals(),locals)
+            exec(code,exec_globals,locals)
         except Exception as e:
             logging.exception(e)
             raise OstrichException(f"Error executing global pretemplate.py: {e}")
@@ -559,10 +560,11 @@ def templateString(srcTemplate: str, filterRender: bool):
         logging.debug(f"Execute {configAll['_ostrich']['templateLocation']}/pretemplate.py")
         with open(f"{configAll['_ostrich']['templateLocation']}/pretemplate.py","r") as f:
             code=f.read()
+            exec_globals = globals().copy()
             locals={}
             locals['env']=e
             try:
-                exec(code,globals(),locals)
+                exec(code,exec_globals,locals)
             except Exception as e:
                 logging.exception(e)
                 raise OstrichException(f"Error executing local pretemplate.py: {e}")
