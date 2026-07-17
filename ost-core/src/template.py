@@ -510,7 +510,21 @@ def template(params: util.Params):
                 
                 archive_path = os.path.join(tmpdir, files[0])
                 with tarfile.open(archive_path, "r:gz") as tar:
-                    tar.extractall(path=tmpdir)
+                    if hasattr(tarfile, 'data_filter'):
+                        tar.extractall(path=tmpdir, filter='data')
+                    else:
+                        # Fallback safe validation for Python < 3.12
+                        def is_within_directory(directory, target):
+                            abs_directory = os.path.abspath(directory)
+                            abs_target = os.path.abspath(target)
+                            prefix = os.path.commonpath([abs_directory, abs_target])
+                            return prefix == abs_directory
+
+                        for member in tar.getmembers():
+                            member_path = os.path.join(tmpdir, member.name)
+                            if not is_within_directory(tmpdir, member_path):
+                                raise OstrichException(f"Security Error: Tar member {member.name} attempts path traversal outside target directory {tmpdir}")
+                        tar.extractall(path=tmpdir)
                 
                 chart_dir = os.path.join(tmpdir, template_name)
                 if not os.path.isdir(chart_dir):
