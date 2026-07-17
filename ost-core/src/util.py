@@ -757,3 +757,24 @@ def helm(*args: str) -> None:
     )
     if result.returncode != 0:
         raise OstrichException(f"Error executing helm {' '.join(args)}")
+
+def safeWriteYaml(filename: str, data: dict) -> None:
+    dirname = os.path.dirname(filename)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+        if os.name != 'nt':
+            try:
+                os.chmod(dirname, 0o700)
+            except Exception:
+                pass
+    
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    mode = 0o600
+    try:
+        fd = os.open(filename, flags, mode)
+        with os.fdopen(fd, 'w') as f:
+            yaml.dump(data, f)
+        if os.name != 'nt':
+            os.chmod(filename, 0o600)
+    except Exception as e:
+        raise OstrichException(f"Error saving configuration file {filename}: {e}")

@@ -554,10 +554,9 @@ def config(params: util.Params):
             raise OstrichException("Invalid number of parameters")
         
         config=util.safeLoad(conffile)
-        with open(conffile, 'w+') as file:
-            config[params.operationParams[1]]=params.operationParams[2]
-            file.write(yaml.dump(config))
-            logging.info("Configuration updated for key %s",params.operationParams[1])
+        config[params.operationParams[1]]=params.operationParams[2]
+        util.safeWriteYaml(conffile, config)
+        logging.info("Configuration updated for key %s",params.operationParams[1])
 
     elif(params.operationParams[0] in ["unset"]):
         if(len(params.operationParams)!=2):
@@ -565,12 +564,9 @@ def config(params: util.Params):
             configUsage()
             raise OstrichException("Invalid number of parameters")
         
-        with open(conffile, 'r+') as file:
-            config = yaml.safe_load(file)
-
-        with open(conffile, 'w+') as file:
-            config.pop(params.operationParams[1], None)
-            file.write(yaml.dump(config))
+        config = util.safeLoad(conffile)
+        config.pop(params.operationParams[1], None)
+        util.safeWriteYaml(conffile, config)
         logging.info("Configuration key %s deleted",params.operationParams[1])
 
     elif(params.operationParams[0] in ["login"]):
@@ -602,10 +598,9 @@ def config(params: util.Params):
         while(repo.endswith("/")):
             repo=repo[:-1]            
 
-        with open(conffile, 'w+') as file:
-            config[type+'_credential_'+repo]=user+":"+password
-            file.write(yaml.dump(config))
-            logging.info("Credential registered for %s server %s",type,repo)
+        config[type+'_credential_'+repo]=user+":"+password
+        util.safeWriteYaml(conffile, config)
+        logging.info("Credential registered for %s server %s",type,repo)
 
     elif(params.operationParams[0] in ["token"]):
         config=util.safeLoad(conffile)
@@ -633,10 +628,9 @@ def config(params: util.Params):
         while(repo.endswith("/")):
             repo=repo[:-1]            
 
-        with open(conffile, 'w+') as file:
-            config[type+'_credential_'+repo]=password
-            file.write(yaml.dump(config))
-            logging.info("Token registered for %s server %s",type,repo)
+        config[type+'_credential_'+repo]=password
+        util.safeWriteYaml(conffile, config)
+        logging.info("Token registered for %s server %s",type,repo)
 
     elif(params.operationParams[0] in ["logout"]):
         if(len(params.operationParams)<3):
@@ -651,7 +645,6 @@ def config(params: util.Params):
             repo=input(type+" address: ")
 
         config=util.safeLoad(conffile)
-        with open(conffile, 'w+') as file:
-            config.pop(type+'_credential_'+repo, None)
-            file.write(yaml.dump(config))
-            logging.info("Credential deleted for %s server %s",type,repo)
+        config.pop(type+'_credential_'+repo, None)
+        util.safeWriteYaml(conffile, config)
+        logging.info("Credential deleted for %s server %s",type,repo)

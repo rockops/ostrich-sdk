@@ -205,8 +205,7 @@ def registry(params: Params):
 
         config['registries'].append({'name': name, 'url': url})
         
-        with open(config_file, 'w') as f:
-            yaml.dump(config, f)
+        util.safeWriteYaml(config_file, config)
             
         logging.info(f"Registry {name} ({url}) added to configuration")
     elif sub_op in ["list", "ls"]:
@@ -237,8 +236,7 @@ def registry(params: Params):
             raise OstrichException(f"Registry {name} not found")
 
         config['registries'] = new_registries
-        with open(config_file, 'w') as f:
-            yaml.dump(config, f)
+        util.safeWriteYaml(config_file, config)
             
         logging.info(f"Registry {name} removed from configuration")
     else:
