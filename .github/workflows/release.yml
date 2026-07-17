@@ -40,16 +40,16 @@ jobs:
           
           # Build ostd-cli with version injection for DefaultTag
           cd ostd-cli
-          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/linux/ostd main.go
-          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/darwin/ostd main.go
-          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/windows/ostd.exe main.go
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/linux/ostd
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/darwin/ostd
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/windows/ostd.exe
           cd ..
           
           # Build ostr-cli with version injection
           cd ostr-cli
-          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/linux/ostr main.go
-          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/darwin/ostr main.go
-          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/windows/ostr.exe main.go
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/linux/ostr
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/darwin/ostr
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/windows/ostr.exe
           cd ..
 
       - name: Log in to GitHub Container Registry
