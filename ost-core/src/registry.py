@@ -39,6 +39,7 @@ Available commands:
   - add [-f] <name> <url> : add a registry to the configuration. Use -f to override.
   - list : list all configured registries
   - rm <name> : remove a registry from the configuration
+  - trust <name> : skip TLS verification for a specific registry
 """)
 
 def get_oci_auth(hostname):
@@ -118,9 +119,11 @@ def registry(params: Params):
 
         
         url = None
+        target_reg = None
         for reg in registries:
             if reg.get('name') == name:
                 url = reg.get('url')
+                target_reg = reg
                 break
         
         if url is None:
@@ -140,7 +143,8 @@ def registry(params: Params):
             registry_url = registry_url.split("/", 1)[0]
 
         helm_args = ["registry", "login", registry_url]
-        if params.skipTlsVerify:
+        skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+        if skip_verify:
             helm_args.append("--insecure")
         util.helm(*helm_args)
     elif sub_op == "logout":
@@ -153,9 +157,11 @@ def registry(params: Params):
 
         
         url = None
+        target_reg = None
         for reg in registries:
             if reg.get('name') == name:
                 url = reg.get('url')
+                target_reg = reg
                 break
         
         if url is None:
@@ -173,7 +179,8 @@ def registry(params: Params):
             registry_url = registry_url.split("/", 1)[0]
 
         helm_args = ["registry", "logout", registry_url]
-        if params.skipTlsVerify:
+        skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+        if skip_verify:
             helm_args.append("--insecure")
         util.helm(*helm_args)
     elif sub_op == "add":
@@ -223,7 +230,8 @@ def registry(params: Params):
             
         logging.info("Configured registries:")
         for reg in registries:
-            print(f"- {reg.get('name')}: {reg.get('url')}")
+            insecure_str = " [insecure]" if reg.get('insecure') else ""
+            print(f"- {reg.get('name')}: {reg.get('url')}{insecure_str}")
     elif sub_op == "rm":
         if len(params.operationParams) < 2:
             registryUsage()
@@ -245,6 +253,28 @@ def registry(params: Params):
         util.safeWriteYaml(config_file, config)
             
         logging.info(f"Registry {name} removed from configuration")
+    elif sub_op == "trust":
+        if len(params.operationParams) < 2:
+            registryUsage()
+            raise OstrichException("Invalid number of parameters")
+        name = params.operationParams[1]
+        
+        config = util.safeLoad(config_file)
+        registries = config.get('registries', [])
+        
+        found = False
+        for reg in registries:
+            if reg.get('name') == name:
+                reg['insecure'] = True
+                found = True
+                break
+                
+        if not found:
+            raise OstrichException(f"Registry {name} not found in configuration")
+            
+        config['registries'] = registries
+        util.safeWriteYaml(config_file, config)
+        logging.info(f"Registry {name} is now marked as trusted (skipping TLS verification)")
     else:
         registryUsage()
         raise OstrichException(f"Unknown registry sub-command: {sub_op}")
@@ -288,6 +318,8 @@ def search(params: Params):
         if registry_filter and reg.get('name') != registry_filter:
             continue
 
+        skip_verify = params.skipTlsVerify or reg.get('insecure', False)
+
         url_str = reg.get('url')
         if "://" not in url_str:
             url_str = "https://" + url_str
@@ -320,7 +352,7 @@ def search(params: Params):
                             pass
                     
                     try:
-                        resp = requests.get(gh_url, headers=headers, timeout=10)
+                        resp = requests.get(gh_url, headers=headers, timeout=10, verify=not skip_verify)
                         if resp.status_code == 200:
                             gh_packages = resp.json()
                             for pkg in gh_packages:
@@ -356,7 +388,7 @@ def search(params: Params):
             else:
                 harbor_url = f"{parsed.scheme}://{hostname}/api/v2.0/repositories"
             
-            resp = oci_request(harbor_url, auth, params.skipTlsVerify)
+            resp = oci_request(harbor_url, auth, skip_verify)
             if resp.status_code == 200:
                 data = resp.json()
                 repos = data.get("repository") if isinstance(data, dict) else data
@@ -376,7 +408,7 @@ def search(params: Params):
         # 3. Try standard OCI _catalog
         if not discovery_done:
             catalog_url = f"{parsed.scheme}://{hostname}/v2/_catalog"
-            resp = oci_request(catalog_url, auth, params.skipTlsVerify)
+            resp = oci_request(catalog_url, auth, skip_verify)
             if resp.status_code == 200:
                 candidates = resp.json().get("repositories", [])
                 for r in candidates:
@@ -415,7 +447,7 @@ def search(params: Params):
             full_display_name = f"{reg['name']}/{display_name}" if display_name else reg['name']
 
             tags_url = f"{parsed.scheme}://{hostname}/v2/{repo_name}/tags/list"
-            tags_resp = oci_request(tags_url, auth, params.skipTlsVerify)
+            tags_resp = oci_request(tags_url, auth, skip_verify)
             if tags_resp.status_code == 200:
                 tags = tags_resp.json().get("tags", [])
                 if tags:

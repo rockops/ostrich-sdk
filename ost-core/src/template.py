@@ -480,9 +480,11 @@ def template(params: util.Params):
             
             registries = registry_op.load_registries()
             repo_url = None
+            target_reg = None
             for reg in registries:
                 if reg.get('name') == repo_name:
                     repo_url = reg.get('url')
+                    target_reg = reg
                     break
             
             if not repo_url:
@@ -499,7 +501,8 @@ def template(params: util.Params):
                 if version:
                     helm_args.extend(["--version", version])
                 
-                if params.skipTlsVerify:
+                skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+                if skip_verify:
                     helm_args.append("--insecure-skip-tls-verify")
                 
                 util.helm(*helm_args)
@@ -652,9 +655,11 @@ def template(params: util.Params):
         
         registries = registry_op.load_registries()
         repo_url = None
+        target_reg = None
         for reg in registries:
             if reg.get('name') == registry_name:
                 repo_url = reg.get('url')
+                target_reg = reg
                 break
         
         if not repo_url:
@@ -690,7 +695,8 @@ def template(params: util.Params):
             logging.info(f"Publishing {plugin_name} version {version} to {repo_url}")
             try:
                 helm_args = ["push", archive_path, repo_url]
-                if params.skipTlsVerify:
+                skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+                if skip_verify:
                     helm_args.append("--insecure-skip-tls-verify")
                 util.helm(*helm_args)
             except OstrichException as e:
