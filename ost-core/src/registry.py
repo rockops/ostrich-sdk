@@ -62,18 +62,16 @@ def oci_request(url, auth_base64, skip_tls_verify=False):
             return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=not skip_tls_verify)
         except requests.exceptions.SSLError as ssl_err:
             if not skip_tls_verify:
-                logging.error(f"TLS certificate verification failed for {target_url}: {ssl_err}")
-                logging.info("To ignore TLS certificate errors, run the command with the '--skip-tls-verify' flag.")
-                raise OstrichException(f"TLS certificate verification failed for {target_url}: {ssl_err}. Use '--skip-tls-verify' to ignore.")
+                logging.error(f"TLS certificate verification failed for {target_url}\nskip certificate validation using --skip-tls-verify")
+                raise SystemExit(1)
             else:
                 return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=False)
         except requests.exceptions.ConnectionError as conn_err:
             err_str = str(conn_err).lower()
             if "ssl" in err_str or "certificate" in err_str or "certify" in err_str:
                 if not skip_tls_verify:
-                    logging.error(f"TLS certificate verification failed for {target_url}: {conn_err}")
-                    logging.info("To ignore TLS certificate errors, run the command with the '--skip-tls-verify' flag.")
-                    raise OstrichException(f"TLS certificate verification failed for {target_url}. Use '--skip-tls-verify' to ignore.")
+                    logging.error(f"TLS certificate verification failed for {target_url}\nskip certificate validation using --skip-tls-verify")
+                    raise SystemExit(1)
             raise
 
     response = perform_get(url, headers)
