@@ -2,7 +2,6 @@ import getpass
 import json
 import logging
 import os
-import string
 
 import src.util as util
 from subprocess import run
@@ -26,7 +25,7 @@ _loglevel: int = logging.INFO
 # Runners implementation
 
 # Execute an operation in the current process
-def inprocess(operation: string, params: util.Params):
+def inprocess(operation: str, params: util.Params):
     """
     Execute a dynamically loaded Python operation file in the current process.
     This function reads and executes a Python script file located at 
@@ -59,21 +58,20 @@ def inprocess(operation: string, params: util.Params):
     """
     logging.info(f"Execute {params.tmpdir}/{operation}/{operation}.py")
     with open(f"{params.tmpdir}/{operation}/{operation}.py","r") as f:
-        global _params
-        _params=params
-        global _dryRun
-        _dryRun=params.dryRun
-        global _localConfig
-        _localConfig=util.loadConf()
-        global _argc, _argv
-        _argv=params.operationParams
-        _argc=len(params.operationParams)
-        global _loglevel
-        _loglevel=params.loglevel
         code=f.read()
 
+        exec_globals = globals().copy()
+        exec_globals.update({
+            "_params": params,
+            "_dryRun": params.dryRun,
+            "_localConfig": util.loadConf(),
+            "_argv": params.operationParams,
+            "_argc": len(params.operationParams),
+            "_loglevel": params.loglevel,
+        })
+
         try:
-            exec(code, globals())
+            exec(code, exec_globals)
         except Exception as e:
             lineNumber: int = None
             # Get the line number
@@ -100,7 +98,7 @@ def inprocess(operation: string, params: util.Params):
 
 
 # Execute an operation locally by running commands defined in a YAML file
-def shell(operation: string, params: util.Params):
+def shell(operation: str, params: util.Params):
     """
     Execute local commands defined in a YAML configuration file.
     
@@ -149,7 +147,7 @@ def shell(operation: string, params: util.Params):
 
 
 # Execute an operation in a container
-def container(operation: string, params: util.Params):
+def container(operation: str, params: util.Params):
     commandFile=f"{params.tmpdir}/{operation}/{operation}.yaml"
     if not os.path.isfile(commandFile):
         raise OstrichException(f"Local command file {commandFile} not found")
@@ -409,7 +407,7 @@ def container(operation: string, params: util.Params):
             raise OstrichException(f"Container command {cmd} failed with code {result.returncode}")
 
 
-def task(operation: string, params: util.Params):
+def task(operation: str, params: util.Params):
 
     if not params.noDeps:
         depfile=f"{params.tmpdir}/{operation}/dependencies.yaml"
@@ -497,7 +495,7 @@ def configUsage():
 
 
 
-def lscred(config: dict, type: string):
+def lscred(config: dict, type: str):
     for k in config.keys():
         spl=k.split("_")
         if(len(spl)>2 and (spl[1] in ["credential"])):
@@ -556,10 +554,9 @@ def config(params: util.Params):
             raise OstrichException("Invalid number of parameters")
         
         config=util.safeLoad(conffile)
-        with open(conffile, 'w+') as file:
-            config[params.operationParams[1]]=params.operationParams[2]
-            file.write(yaml.dump(config))
-            logging.info("Configuration updated for key %s",params.operationParams[1])
+        config[params.operationParams[1]]=params.operationParams[2]
+        util.safeWriteYaml(conffile, config)
+        logging.info("Configuration updated for key %s",params.operationParams[1])
 
     elif(params.operationParams[0] in ["unset"]):
         if(len(params.operationParams)!=2):
@@ -567,12 +564,9 @@ def config(params: util.Params):
             configUsage()
             raise OstrichException("Invalid number of parameters")
         
-        with open(conffile, 'r+') as file:
-            config = yaml.safe_load(file)
-
-        with open(conffile, 'w+') as file:
-            config.pop(params.operationParams[1], None)
-            file.write(yaml.dump(config))
+        config = util.safeLoad(conffile)
+        config.pop(params.operationParams[1], None)
+        util.safeWriteYaml(conffile, config)
         logging.info("Configuration key %s deleted",params.operationParams[1])
 
     elif(params.operationParams[0] in ["login"]):
@@ -604,10 +598,9 @@ def config(params: util.Params):
         while(repo.endswith("/")):
             repo=repo[:-1]            
 
-        with open(conffile, 'w+') as file:
-            config[type+'_credential_'+repo]=user+":"+password
-            file.write(yaml.dump(config))
-            logging.info("Credential registered for %s server %s",type,repo)
+        config[type+'_credential_'+repo]=user+":"+password
+        util.safeWriteYaml(conffile, config)
+        logging.info("Credential registered for %s server %s",type,repo)
 
     elif(params.operationParams[0] in ["token"]):
         config=util.safeLoad(conffile)
@@ -635,10 +628,9 @@ def config(params: util.Params):
         while(repo.endswith("/")):
             repo=repo[:-1]            
 
-        with open(conffile, 'w+') as file:
-            config[type+'_credential_'+repo]=password
-            file.write(yaml.dump(config))
-            logging.info("Token registered for %s server %s",type,repo)
+        config[type+'_credential_'+repo]=password
+        util.safeWriteYaml(conffile, config)
+        logging.info("Token registered for %s server %s",type,repo)
 
     elif(params.operationParams[0] in ["logout"]):
         if(len(params.operationParams)<3):
@@ -653,7 +645,6 @@ def config(params: util.Params):
             repo=input(type+" address: ")
 
         config=util.safeLoad(conffile)
-        with open(conffile, 'w+') as file:
-            config.pop(type+'_credential_'+repo, None)
-            file.write(yaml.dump(config))
-            logging.info("Credential deleted for %s server %s",type,repo)
+        config.pop(type+'_credential_'+repo, None)
+        util.safeWriteYaml(conffile, config)
+        logging.info("Credential deleted for %s server %s",type,repo)

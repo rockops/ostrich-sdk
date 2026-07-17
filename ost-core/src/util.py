@@ -2,7 +2,6 @@ from inspect import currentframe, stack
 import logging
 import os
 import shutil
-import string
 import sys
 from typing import Any
 from semver import Version
@@ -41,28 +40,29 @@ jinja: Template
 e: Environment
 
 class Params:
-    usage=False
-    debug=False
-    dryRun=False
-    rmTmpDir=False
-    noDeps=False
-    skip=[]
-    executedTasks=[]
-    userOutput=False
-    pluginFile="ostrich.yaml"
-    kubeConfig: string=None
-    operation=""
-    operationParams=[]
-    registry: string=None
-    tmpdir: string=None
-    pluginTmpDir: string=None
-    loglevel=logging.INFO
-    forceTmpDir=False
-    deletePluginTmpDir=True
-    nologo=False
-    skipTlsVerify=False
-    
-    parsedPluginConfig: Any
+    def __init__(self):
+        self.usage = False
+        self.debug = False
+        self.dryRun = False
+        self.rmTmpDir = False
+        self.noDeps = False
+        self.skip = []
+        self.executedTasks = []
+        self.userOutput = False
+        self.pluginFile = "ostrich.yaml"
+        self.kubeConfig = None
+        self.operation = ""
+        self.operationParams = []
+        self.registry = None
+        self.tmpdir = None
+        self.pluginTmpDir = None
+        self.loglevel = logging.INFO
+        self.forceTmpDir = False
+        self.deletePluginTmpDir = True
+        self.nologo = False
+        self.skipTlsVerify = False
+        self.parsedPluginConfig = {}
+
 
     def loadPluginConf(self):
         try:
@@ -136,7 +136,7 @@ class Params:
         except BaseException as e:
             raise OstrichException(f"Error loading file {self.pluginFile} {str(e)}")
 
-    def getPluginConf(self, key: string, defval="_UNDEFINED_"):
+    def getPluginConf(self, key: str, defval="_UNDEFINED_"):
         try:
             ret=self.parsedPluginConfig
             for k in key.split("."):
@@ -214,7 +214,7 @@ def templateRoot():
 def testTemplateRoot():
     return root()+"/test-templates"
 
-def getTemplatePath(tpl: string):
+def getTemplatePath(tpl: str):
     tpl_str = str(tpl)
     roots = [templateRoot(), testTemplateRoot(), extraTemplateRoot()]
     
@@ -326,7 +326,7 @@ def toYaml(data):
     return yaml.dump(data)
 
 
-def minVersion(version: string,versionToCheck: string,key: string) -> string:
+def minVersion(version: str,versionToCheck: str,key: str) -> str:
     if(not version):
         raise OstrichException(f"Version not defined in {key}")
 
@@ -336,7 +336,7 @@ def minVersion(version: string,versionToCheck: string,key: string) -> string:
         raise OstrichException(f"Version {version} defined in {key} must be greater than {versionToCheck}")
     return version
 
-def maxVersion(version: string,versionToCheck: string,key: string) -> string:
+def maxVersion(version: str,versionToCheck: str,key: str) -> str:
     if(not version):
         raise OstrichException(f"Version not defined in {key}")
 
@@ -505,7 +505,7 @@ def addGlobal(name,func):
     e.globals[name]=globalDecorator(func)
 
 
-def templateString(srcTemplate: string, filterRender: bool):
+def templateString(srcTemplate: str, filterRender: bool):
     global configAll
     global jinja
     global e
@@ -547,10 +547,11 @@ def templateString(srcTemplate: string, filterRender: bool):
     logging.debug(f"Execute {templateRoot()}/global/pretemplate.py")
     with open(f"{templateRoot()}/global/pretemplate.py","r") as f:
         code=f.read()
+        exec_globals = globals().copy()
         locals={}
         locals['env']=e
         try:
-            exec(code,globals(),locals)
+            exec(code,exec_globals,locals)
         except Exception as e:
             logging.exception(e)
             raise OstrichException(f"Error executing global pretemplate.py: {e}")
@@ -559,10 +560,11 @@ def templateString(srcTemplate: string, filterRender: bool):
         logging.debug(f"Execute {configAll['_ostrich']['templateLocation']}/pretemplate.py")
         with open(f"{configAll['_ostrich']['templateLocation']}/pretemplate.py","r") as f:
             code=f.read()
+            exec_globals = globals().copy()
             locals={}
             locals['env']=e
             try:
-                exec(code,globals(),locals)
+                exec(code,exec_globals,locals)
             except Exception as e:
                 logging.exception(e)
                 raise OstrichException(f"Error executing local pretemplate.py: {e}")
@@ -599,7 +601,7 @@ def dict_merge(dct, merge_dct):
             dct[k] = merge_dct[k]
 
 
-def getMergedConfig(inputDir: string, config: Any, params: Params):
+def getMergedConfig(inputDir: str, config: Any, params: Params):
     global configAll
     configAll = config
     templateConfig = {}
@@ -657,7 +659,7 @@ def getMergedConfig(inputDir: string, config: Any, params: Params):
     
     return configAll
 
-def template(inputDir: string, config: Any, params: Params,operation):
+def template(inputDir: str, config: Any, params: Params,operation):
 
     logging.debug(f"Templating {inputDir}")
     
@@ -689,7 +691,7 @@ def template(inputDir: string, config: Any, params: Params,operation):
             configAll['_ostrich']['currentfile']=file
 
             srcTemplateFile=subdir+"/"+file
-            srcTemplate : string
+            srcTemplate : str
 
             if(os.path.splitext(file)[1]==".tmpl"):
 
@@ -755,3 +757,24 @@ def helm(*args: str) -> None:
     )
     if result.returncode != 0:
         raise OstrichException(f"Error executing helm {' '.join(args)}")
+
+def safeWriteYaml(filename: str, data: dict) -> None:
+    dirname = os.path.dirname(filename)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+        if os.name != 'nt':
+            try:
+                os.chmod(dirname, 0o700)
+            except Exception:
+                pass
+    
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    mode = 0o600
+    try:
+        fd = os.open(filename, flags, mode)
+        with os.fdopen(fd, 'w') as f:
+            yaml.dump(data, f)
+        if os.name != 'nt':
+            os.chmod(filename, 0o600)
+    except Exception as e:
+        raise OstrichException(f"Error saving configuration file {filename}: {e}")

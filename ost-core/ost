@@ -1,7 +1,6 @@
 #! /usr/bin/env python 
 
 import os
-import string
 from subprocess import CalledProcessError
 import sys
 import tempfile
@@ -53,87 +52,58 @@ Registry operations:
 
 version = "0.0.0-dev"
 
-params = util.Params()
-
 # Log option
 logformat='%(levelname)s - %(message)s'
 loglevel=logging.INFO
 
-registry: string=None
+import argparse
 
-# Parse standard arguments
-args = sys.argv[1:]
-logo: bool=not "--nologo" in args
+# Setup argparse parser (excluding standard help formatting)
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument('-f', '--file')
+parser.add_argument('-c', '--kubeconfig')
+parser.add_argument('-d', '--debug', action='store_true')
+parser.add_argument('-r', '--registry')
+parser.add_argument('-o', '--output')
+parser.add_argument('-dr', '--dry-run', action='store_true')
+parser.add_argument('--rm', action='store_true')
+parser.add_argument('-nd', '--nodeps', action='store_true')
+parser.add_argument('-s', '--skip', action='append', default=[])
+parser.add_argument('--nologo', action='store_true')
+parser.add_argument('-k', '--keep', action='store_true')
+parser.add_argument('--skip-tls-verify', action='store_true')
+parser.add_argument('--version', action='store_true')
+parser.add_argument('-h', '--help', action='store_true')
 
-inOperationParamsPart=False
+parsed, remaining = parser.parse_known_args()
 
-while len(args):
-    if (args[0] == '-f' or args[0] == '--file') and not inOperationParamsPart:
-        params.pluginFile = args[1]
-        args = args[2:]
-    elif (args[0] == '-c' or args[0] == '--kubeconfig') and not inOperationParamsPart:    
-        params.kubeConfig = args[1]
-        args = args[2:]
-    elif (args[0] == '-d' or args[0] == '--debug') and not inOperationParamsPart:
-        loglevel=logging.DEBUG
-        args = args[1:]
-    elif (args[0] == '-r' or args[0] == '--registry'):
-        params.registry = args[1]
-        args = args[2:]
-    elif (args[0] == '-o' or args[0] == '--output') and not inOperationParamsPart:
-        params.tmpdir = args[1]
-        params.userOutput = True
-        args = args[2:]
-    elif (args[0] == '-dr' or args[0] == '--dry-run'):
-        params.dryRun=True
-        if(params.tmpdir == None):
-          params.tmpdir = "dry-run"
-        args = args[1:]
-    elif args[0] == '--rm':
-        params.rmTmpDir=True
-        args = args[1:]
-    elif (args[0] == '-nd' or args[0] == '--nodeps'):
-        params.noDeps=True
-        args = args[1:]
-    elif (args[0] == '-s' or args[0] == '--skip'):
-        params.skip.append(args[1])
-        args = args[2:]
-    elif args[0] == '--nologo':
-        logo=False
-        args = args[1:]
-    elif (args[0] == '--keep' or args[0] == '-k'):
-        params.deletePluginTmpDir=False
-        args = args[1:]
-    elif (args[0] == '-h' or args[0] == '--help' or args[0] == 'help') and not inOperationParamsPart:
-        params.usage=True
-        args = args[1:]
-    elif args[0] == '--version':
-        print ("ost "+version)
-        quit(0)
-    elif args[0] == 'run' :
-        inOperationParamsPart=True
-        args = args[1:]
-    else:
-        if args[0].startswith("-") and not inOperationParamsPart:
-            usage(False)
-            print("ERROR - Bad flag "+args[0])
-            print("        If you need to pass parameters to the task, use the run command") 
-            print("        Example: ost run deploy --reload => calls the deploy task with --reload as parameters") 
-            print("")
-            quit(1)
+if parsed.version:
+    print("ost " + version)
+    sys.exit(0)
 
-        if args[0] in ["template","config","registry","help"]:
-            inOperationParamsPart=True
-            params.operationParams.append(args[0])
-            args = args[1:]
-        elif not inOperationParamsPart:
-            usage(False)
-            print("Did you forget the 'run' command before the operation parameters?")
-            quit(1)
-        else:
-            params.operationParams.append(args[0])
-            args = args[1:]
+params = util.Params()
+params.pluginFile = parsed.file if parsed.file else "ostrich.yaml"
+params.kubeConfig = parsed.kubeconfig
+params.registry = parsed.registry
+params.tmpdir = parsed.output
+if parsed.output:
+    params.userOutput = True
+params.dryRun = parsed.dry_run
+if parsed.dry_run and not params.tmpdir:
+    params.tmpdir = "dry-run"
+params.rmTmpDir = parsed.rm
+params.noDeps = parsed.nodeps
+params.skip = parsed.skip if parsed.skip else []
+params.deletePluginTmpDir = not parsed.keep
+params.nologo = parsed.nologo
+params.skipTlsVerify = parsed.skip_tls_verify
 
+logo = not parsed.nologo
+if parsed.debug:
+    loglevel = logging.DEBUG
+
+if parsed.help or (len(remaining) > 0 and remaining[0] == 'help'):
+    params.usage = True
 
 # Fix for [WinError 6] on Windows when running under pytest
 # We use a custom StreamHandler that suppresses OSError
@@ -145,23 +115,40 @@ else:
     handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter(logformat))
 logger.addHandler(handler)
-# logging.basicConfig(format=logformat,level=loglevel, stream=sys.stdout)
 
-if(params.usage):
+if params.usage:
     usage(False)
-    quit(0)
+    sys.exit(0)
 
-if len(params.operationParams)==0:
+if len(remaining) == 0:
     usage()
 
-params.operation=params.operationParams[0]
-params.operationParams=params.operationParams[1:]
+verb = remaining[0]
+if verb == 'run':
+    params.operationParams = remaining[1:]
+elif verb in ["template", "config", "registry", "help"]:
+    params.operationParams = remaining
+else:
+    if verb.startswith('-'):
+        usage(False)
+        print("ERROR - Bad flag " + verb)
+        print("        If you need to pass parameters to the task, use the run command")
+        print("        Example: ost run deploy --reload => calls the deploy task with --reload as parameters")
+        print("")
+        sys.exit(1)
+    else:
+        usage(False)
+        print("Did you forget the 'run' command before the operation parameters?")
+        sys.exit(1)
+
+params.operation = params.operationParams[0]
+params.operationParams = params.operationParams[1:]
 
 if params.operation in ["template", "config", "registry", "help"]:
     params.collectStandardArgs()
 
-if(params.operation=="template" and len(params.operationParams)>0 and params.operationParams[0] in ["config", "values"]):
-    logo=False
+if params.operation == "template" and len(params.operationParams) > 0 and params.operationParams[0] in ["config", "values"]:
+    logo = False
 
 if logo and not params.nologo:
     print(r'''                              _              

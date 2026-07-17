@@ -1,7 +1,6 @@
 import logging
 import os
 import shutil
-import string
 import tempfile
 import unittest
 
@@ -194,7 +193,7 @@ def ensureTmpDir(params: util.Params):
 
 
 
-def saveToTmp(template: string, originalFilename: string,params: util.Params):
+def saveToTmp(template: str, originalFilename: str,params: util.Params):
     
     dest=os.path.abspath(params.tmpdir+"/"+originalFilename)
     destdir=os.path.dirname(dest)
@@ -253,7 +252,7 @@ def packageUsage():
 """)
 
 
-def packageAux(packageDir: string, packageOutput: string, deleteTmpDir: bool):
+def packageAux(packageDir: str, packageOutput: str, deleteTmpDir: bool):
     logging.debug("Packaging template from %s to %s",packageDir,packageOutput)
 
     if(not os.path.isdir(packageDir)):
@@ -481,9 +480,11 @@ def template(params: util.Params):
             
             registries = registry_op.load_registries()
             repo_url = None
+            target_reg = None
             for reg in registries:
                 if reg.get('name') == repo_name:
                     repo_url = reg.get('url')
+                    target_reg = reg
                     break
             
             if not repo_url:
@@ -500,7 +501,8 @@ def template(params: util.Params):
                 if version:
                     helm_args.extend(["--version", version])
                 
-                if params.skipTlsVerify:
+                skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+                if skip_verify:
                     helm_args.append("--insecure-skip-tls-verify")
                 
                 util.helm(*helm_args)
@@ -511,7 +513,21 @@ def template(params: util.Params):
                 
                 archive_path = os.path.join(tmpdir, files[0])
                 with tarfile.open(archive_path, "r:gz") as tar:
-                    tar.extractall(path=tmpdir)
+                    if hasattr(tarfile, 'data_filter'):
+                        tar.extractall(path=tmpdir, filter='data')
+                    else:
+                        # Fallback safe validation for Python < 3.12
+                        def is_within_directory(directory, target):
+                            abs_directory = os.path.abspath(directory)
+                            abs_target = os.path.abspath(target)
+                            prefix = os.path.commonpath([abs_directory, abs_target])
+                            return prefix == abs_directory
+
+                        for member in tar.getmembers():
+                            member_path = os.path.join(tmpdir, member.name)
+                            if not is_within_directory(tmpdir, member_path):
+                                raise OstrichException(f"Security Error: Tar member {member.name} attempts path traversal outside target directory {tmpdir}")
+                        tar.extractall(path=tmpdir)
                 
                 chart_dir = os.path.join(tmpdir, template_name)
                 if not os.path.isdir(chart_dir):
@@ -639,9 +655,11 @@ def template(params: util.Params):
         
         registries = registry_op.load_registries()
         repo_url = None
+        target_reg = None
         for reg in registries:
             if reg.get('name') == registry_name:
                 repo_url = reg.get('url')
+                target_reg = reg
                 break
         
         if not repo_url:
@@ -677,7 +695,8 @@ def template(params: util.Params):
             logging.info(f"Publishing {plugin_name} version {version} to {repo_url}")
             try:
                 helm_args = ["push", archive_path, repo_url]
-                if params.skipTlsVerify:
+                skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+                if skip_verify:
                     helm_args.append("--insecure-skip-tls-verify")
                 util.helm(*helm_args)
             except OstrichException as e:

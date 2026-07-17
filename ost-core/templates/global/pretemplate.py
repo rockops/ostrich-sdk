@@ -10,7 +10,7 @@ def unitGlobal(s):
 # Parses a JSON string and returns an array.
 # If the element is already an array, no change is made.
 # If the element is a single object, it is returned as a single-element array.
-def jsonArray(jsonstr: string):
+def jsonArray(jsonstr: str):
     import json
     try:
         json_data = json.loads(jsonstr)

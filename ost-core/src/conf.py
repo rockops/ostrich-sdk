@@ -10,8 +10,12 @@ parsedConfig: Any=None
 def loadConf():
     global parsedConfig
 
-    with open(os.path.dirname(sys.argv[0])+"/config.yaml") as f:
+    # Load relative to this module's file location (src/conf.py -> config.yaml is in parent)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(base_dir, "config.yaml")
+    with open(config_path, "r") as f:
         parsedConfig = yaml.safe_load(f)
+
 
 # Gets the conf key :
 # Check in the plugin configuration,

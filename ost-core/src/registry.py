@@ -39,6 +39,7 @@ Available commands:
   - add [-f] <name> <url> : add a registry to the configuration. Use -f to override.
   - list : list all configured registries
   - rm <name> : remove a registry from the configuration
+  - trust <name> : skip TLS verification for a specific registry
 """)
 
 def get_oci_auth(hostname):
@@ -52,17 +53,55 @@ def get_oci_auth(hostname):
     except Exception:
         return None
 
-def oci_request(url, auth_base64):
+def find_registry_name_by_url(url):
+    try:
+        registries = load_registries()
+        parsed_target = urlparse(url)
+        target_host = parsed_target.netloc
+        if not target_host:
+            target_host = parsed_target.path.split('/')[0]
+            
+        for reg in registries:
+            reg_url = reg.get('url')
+            if not reg_url:
+                continue
+            if "://" not in reg_url:
+                reg_url = "https://" + reg_url
+            parsed_reg = urlparse(reg_url)
+            reg_host = parsed_reg.netloc
+            if target_host == reg_host:
+                return reg.get('name')
+    except Exception:
+        pass
+    return None
+
+def oci_request(url, auth_base64, skip_tls_verify=False):
     headers = {}
     if auth_base64:
         headers["Authorization"] = f"Basic {auth_base64}"
     
-    try:
-        # Try with standard verification
-        response = requests.get(url, headers=headers, timeout=10)
-    except Exception:
-        # Fallback to unverified for internal registries
-        response = requests.get(url, headers=headers, timeout=10, verify=False)
+    def perform_get(target_url, target_headers=None, target_params=None):
+        try:
+            return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=not skip_tls_verify)
+        except requests.exceptions.SSLError as ssl_err:
+            if not skip_tls_verify:
+                reg_name = find_registry_name_by_url(target_url)
+                trust_msg = f"\nor trust the registry using ost registry trust {reg_name}" if reg_name else ""
+                logging.error(f"TLS certificate verification failed for {target_url}\nskip certificate validation using --skip-tls-verify{trust_msg}")
+                raise SystemExit(1)
+            else:
+                return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=False)
+        except requests.exceptions.ConnectionError as conn_err:
+            err_str = str(conn_err).lower()
+            if "ssl" in err_str or "certificate" in err_str or "certify" in err_str:
+                if not skip_tls_verify:
+                    reg_name = find_registry_name_by_url(target_url)
+                    trust_msg = f"\nor trust the registry using ost registry trust {reg_name}" if reg_name else ""
+                    logging.error(f"TLS certificate verification failed for {target_url}\nskip certificate validation using --skip-tls-verify{trust_msg}")
+                    raise SystemExit(1)
+            raise
+
+    response = perform_get(url, headers)
 
     if response.status_code == 401:
         challenge = response.headers.get("Www-Authenticate", "")
@@ -77,19 +116,13 @@ def oci_request(url, auth_base64):
                     params["scope"] = scope.group(1)
                 
                 token_headers = {"Authorization": f"Basic {auth_base64}"} if auth_base64 else {}
-                try:
-                    token_resp = requests.get(realm, params=params, headers=token_headers, timeout=10)
-                except Exception:
-                    token_resp = requests.get(realm, params=params, headers=token_headers, timeout=10, verify=False)
+                token_resp = perform_get(realm, token_headers, params)
                 
                 if token_resp.status_code == 200:
                     token = token_resp.json().get("token") or token_resp.json().get("access_token")
                     if token:
                         headers = {"Authorization": f"Bearer {token}"}
-                        try:
-                            response = requests.get(url, headers=headers, timeout=10)
-                        except Exception:
-                            response = requests.get(url, headers=headers, timeout=10, verify=False)
+                        response = perform_get(url, headers)
                     
     return response
 
@@ -112,9 +145,11 @@ def registry(params: Params):
 
         
         url = None
+        target_reg = None
         for reg in registries:
             if reg.get('name') == name:
                 url = reg.get('url')
+                target_reg = reg
                 break
         
         if url is None:
@@ -134,7 +169,8 @@ def registry(params: Params):
             registry_url = registry_url.split("/", 1)[0]
 
         helm_args = ["registry", "login", registry_url]
-        if params.skipTlsVerify:
+        skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+        if skip_verify:
             helm_args.append("--insecure")
         util.helm(*helm_args)
     elif sub_op == "logout":
@@ -147,9 +183,11 @@ def registry(params: Params):
 
         
         url = None
+        target_reg = None
         for reg in registries:
             if reg.get('name') == name:
                 url = reg.get('url')
+                target_reg = reg
                 break
         
         if url is None:
@@ -167,7 +205,8 @@ def registry(params: Params):
             registry_url = registry_url.split("/", 1)[0]
 
         helm_args = ["registry", "logout", registry_url]
-        if params.skipTlsVerify:
+        skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+        if skip_verify:
             helm_args.append("--insecure")
         util.helm(*helm_args)
     elif sub_op == "add":
@@ -205,8 +244,7 @@ def registry(params: Params):
 
         config['registries'].append({'name': name, 'url': url})
         
-        with open(config_file, 'w') as f:
-            yaml.dump(config, f)
+        util.safeWriteYaml(config_file, config)
             
         logging.info(f"Registry {name} ({url}) added to configuration")
     elif sub_op in ["list", "ls"]:
@@ -218,7 +256,8 @@ def registry(params: Params):
             
         logging.info("Configured registries:")
         for reg in registries:
-            print(f"- {reg.get('name')}: {reg.get('url')}")
+            insecure_str = " [insecure]" if reg.get('insecure') else ""
+            print(f"- {reg.get('name')}: {reg.get('url')}{insecure_str}")
     elif sub_op == "rm":
         if len(params.operationParams) < 2:
             registryUsage()
@@ -237,10 +276,31 @@ def registry(params: Params):
             raise OstrichException(f"Registry {name} not found")
 
         config['registries'] = new_registries
-        with open(config_file, 'w') as f:
-            yaml.dump(config, f)
+        util.safeWriteYaml(config_file, config)
             
         logging.info(f"Registry {name} removed from configuration")
+    elif sub_op == "trust":
+        if len(params.operationParams) < 2:
+            registryUsage()
+            raise OstrichException("Invalid number of parameters")
+        name = params.operationParams[1]
+        
+        config = util.safeLoad(config_file)
+        registries = config.get('registries', [])
+        
+        found = False
+        for reg in registries:
+            if reg.get('name') == name:
+                reg['insecure'] = True
+                found = True
+                break
+                
+        if not found:
+            raise OstrichException(f"Registry {name} not found in configuration")
+            
+        config['registries'] = registries
+        util.safeWriteYaml(config_file, config)
+        logging.info(f"Registry {name} is now marked as trusted (skipping TLS verification)")
     else:
         registryUsage()
         raise OstrichException(f"Unknown registry sub-command: {sub_op}")
@@ -284,6 +344,8 @@ def search(params: Params):
         if registry_filter and reg.get('name') != registry_filter:
             continue
 
+        skip_verify = params.skipTlsVerify or reg.get('insecure', False)
+
         url_str = reg.get('url')
         if "://" not in url_str:
             url_str = "https://" + url_str
@@ -316,7 +378,7 @@ def search(params: Params):
                             pass
                     
                     try:
-                        resp = requests.get(gh_url, headers=headers, timeout=10)
+                        resp = requests.get(gh_url, headers=headers, timeout=10, verify=not skip_verify)
                         if resp.status_code == 200:
                             gh_packages = resp.json()
                             for pkg in gh_packages:
@@ -352,7 +414,7 @@ def search(params: Params):
             else:
                 harbor_url = f"{parsed.scheme}://{hostname}/api/v2.0/repositories"
             
-            resp = oci_request(harbor_url, auth)
+            resp = oci_request(harbor_url, auth, skip_verify)
             if resp.status_code == 200:
                 data = resp.json()
                 repos = data.get("repository") if isinstance(data, dict) else data
@@ -372,7 +434,7 @@ def search(params: Params):
         # 3. Try standard OCI _catalog
         if not discovery_done:
             catalog_url = f"{parsed.scheme}://{hostname}/v2/_catalog"
-            resp = oci_request(catalog_url, auth)
+            resp = oci_request(catalog_url, auth, skip_verify)
             if resp.status_code == 200:
                 candidates = resp.json().get("repositories", [])
                 for r in candidates:
@@ -411,7 +473,7 @@ def search(params: Params):
             full_display_name = f"{reg['name']}/{display_name}" if display_name else reg['name']
 
             tags_url = f"{parsed.scheme}://{hostname}/v2/{repo_name}/tags/list"
-            tags_resp = oci_request(tags_url, auth)
+            tags_resp = oci_request(tags_url, auth, skip_verify)
             if tags_resp.status_code == 200:
                 tags = tags_resp.json().get("tags", [])
                 if tags:
