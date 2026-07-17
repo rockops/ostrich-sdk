@@ -53,6 +53,28 @@ def get_oci_auth(hostname):
     except Exception:
         return None
 
+def find_registry_name_by_url(url):
+    try:
+        registries = load_registries()
+        parsed_target = urlparse(url)
+        target_host = parsed_target.netloc
+        if not target_host:
+            target_host = parsed_target.path.split('/')[0]
+            
+        for reg in registries:
+            reg_url = reg.get('url')
+            if not reg_url:
+                continue
+            if "://" not in reg_url:
+                reg_url = "https://" + reg_url
+            parsed_reg = urlparse(reg_url)
+            reg_host = parsed_reg.netloc
+            if target_host == reg_host:
+                return reg.get('name')
+    except Exception:
+        pass
+    return None
+
 def oci_request(url, auth_base64, skip_tls_verify=False):
     headers = {}
     if auth_base64:
@@ -63,7 +85,9 @@ def oci_request(url, auth_base64, skip_tls_verify=False):
             return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=not skip_tls_verify)
         except requests.exceptions.SSLError as ssl_err:
             if not skip_tls_verify:
-                logging.error(f"TLS certificate verification failed for {target_url}\nskip certificate validation using --skip-tls-verify")
+                reg_name = find_registry_name_by_url(target_url)
+                trust_msg = f"\nor trust the registry using ost registry trust {reg_name}" if reg_name else ""
+                logging.error(f"TLS certificate verification failed for {target_url}\nskip certificate validation using --skip-tls-verify{trust_msg}")
                 raise SystemExit(1)
             else:
                 return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=False)
@@ -71,7 +95,9 @@ def oci_request(url, auth_base64, skip_tls_verify=False):
             err_str = str(conn_err).lower()
             if "ssl" in err_str or "certificate" in err_str or "certify" in err_str:
                 if not skip_tls_verify:
-                    logging.error(f"TLS certificate verification failed for {target_url}\nskip certificate validation using --skip-tls-verify")
+                    reg_name = find_registry_name_by_url(target_url)
+                    trust_msg = f"\nor trust the registry using ost registry trust {reg_name}" if reg_name else ""
+                    logging.error(f"TLS certificate verification failed for {target_url}\nskip certificate validation using --skip-tls-verify{trust_msg}")
                     raise SystemExit(1)
             raise
 
