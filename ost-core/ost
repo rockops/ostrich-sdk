@@ -50,7 +50,18 @@ Registry operations:
     if(abort):
         quit(1)
 
-version = "0.0.0-dev"
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_version_file = os.path.join(_script_dir, "VERSION")
+if os.path.exists(_version_file):
+    with open(_version_file, "r") as _f:
+        version = _f.read().strip()
+else:
+    _repo_version_file = os.path.join(os.path.dirname(_script_dir), "VERSION")
+    if os.path.exists(_repo_version_file):
+        with open(_repo_version_file, "r") as _f:
+            version = _f.read().strip()
+    else:
+        version = "0.0.0-dev"
 
 # Log option
 logformat='%(levelname)s - %(message)s'

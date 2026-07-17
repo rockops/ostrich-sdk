@@ -1,0 +1,47 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ost-core/requirements.txt
+
+      - name: Build Go Binaries
+        run: |
+          cd scripts
+          ./build.sh
+
+      - name: Build Local Docker Image
+        run: |
+          ./docker/ostrich-sdk/build.sh -n test
+
+      - name: Run Integration Tests (Host and Container Runners)
+        env:
+          OST_IMAGE_TAG: test
+        run: |
+          export PYTHONPATH=$(pwd)/ost-core:$PYTHONPATH
+          ./scripts/run_int_tests.sh

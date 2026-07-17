@@ -1,0 +1,93 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Extract Version
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Building version $VERSION from tag $TAG_NAME"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+
+      - name: Compile CLI Binaries for Release
+        run: |
+          mkdir -p bin/linux bin/darwin bin/windows
+          
+          # Build ostd-cli with version injection for DefaultTag
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o bin/linux/ostd ostd-cli/main.go
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o bin/darwin/ostd ostd-cli/main.go
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o bin/windows/ostd.exe ostd-cli/main.go
+          
+          # Build ostr-cli with version injection
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o bin/linux/ostr ostr-cli/main.go
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o bin/darwin/ostr ostr-cli/main.go
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o bin/windows/ostr.exe ostr-cli/main.go
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Docker Images
+        run: |
+          # Lowercase owner name to avoid docker push errors if owner has uppercase letters
+          OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          
+          # Build and push tag-specific images
+          PRIVATE_DOCKER_REGISTRY=ghcr.io/$OWNER_LOWER ./docker/ostrich-sdk/build.sh ${{ env.VERSION }}
+          
+          # Tag and push 'latest' images
+          docker tag ostrich-sdk:${{ env.VERSION }} ghcr.io/$OWNER_LOWER/ostrich-sdk:latest
+          docker tag ostrich-sdk-ssh:${{ env.VERSION }} ghcr.io/$OWNER_LOWER/ostrich-sdk-ssh:latest
+          
+          docker push ghcr.io/$OWNER_LOWER/ostrich-sdk:latest
+          docker push ghcr.io/$OWNER_LOWER/ostrich-sdk-ssh:latest
+
+      - name: Package Assets for GitHub Release
+        run: |
+          mkdir -p release-assets
+          cp bin/linux/ostd release-assets/ostd-linux-amd64
+          cp bin/darwin/ostd release-assets/ostd-darwin-amd64
+          cp bin/windows/ostd.exe release-assets/ostd-windows-amd64.exe
+          cp bin/linux/ostr release-assets/ostr-linux-amd64
+          cp bin/darwin/ostr release-assets/ostr-darwin-amd64
+          cp bin/windows/ostr.exe release-assets/ostr-windows-amd64.exe
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          name: Release ${{ env.VERSION }}
+          body: |
+            Ostrich SDK version ${{ env.VERSION }}
+            
+            ### CLI Clients
+            Download the appropriate client binary below.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

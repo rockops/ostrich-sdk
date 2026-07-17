@@ -24,6 +24,7 @@ mkdir $TOP/sdk
 for D in $(ls $TOP/../../ost-core | grep -v "__pycache__" ); do
     cp -r $TOP/../../ost-core/$D $TOP/sdk
 done
+cp $TOP/../../VERSION $TOP/sdk/VERSION
 
 export PATH=/usr/bin:$PATH
 
