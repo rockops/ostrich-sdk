@@ -52,17 +52,31 @@ def get_oci_auth(hostname):
     except Exception:
         return None
 
-def oci_request(url, auth_base64):
+def oci_request(url, auth_base64, skip_tls_verify=False):
     headers = {}
     if auth_base64:
         headers["Authorization"] = f"Basic {auth_base64}"
     
-    try:
-        # Try with standard verification
-        response = requests.get(url, headers=headers, timeout=10)
-    except Exception:
-        # Fallback to unverified for internal registries
-        response = requests.get(url, headers=headers, timeout=10, verify=False)
+    def perform_get(target_url, target_headers=None, target_params=None):
+        try:
+            return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=not skip_tls_verify)
+        except requests.exceptions.SSLError as ssl_err:
+            if not skip_tls_verify:
+                logging.error(f"TLS certificate verification failed for {target_url}: {ssl_err}")
+                logging.info("To ignore TLS certificate errors, run the command with the '--skip-tls-verify' flag.")
+                raise OstrichException(f"TLS certificate verification failed for {target_url}: {ssl_err}. Use '--skip-tls-verify' to ignore.")
+            else:
+                return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=False)
+        except requests.exceptions.ConnectionError as conn_err:
+            err_str = str(conn_err).lower()
+            if "ssl" in err_str or "certificate" in err_str or "certify" in err_str:
+                if not skip_tls_verify:
+                    logging.error(f"TLS certificate verification failed for {target_url}: {conn_err}")
+                    logging.info("To ignore TLS certificate errors, run the command with the '--skip-tls-verify' flag.")
+                    raise OstrichException(f"TLS certificate verification failed for {target_url}. Use '--skip-tls-verify' to ignore.")
+            raise
+
+    response = perform_get(url, headers)
 
     if response.status_code == 401:
         challenge = response.headers.get("Www-Authenticate", "")
@@ -77,19 +91,13 @@ def oci_request(url, auth_base64):
                     params["scope"] = scope.group(1)
                 
                 token_headers = {"Authorization": f"Basic {auth_base64}"} if auth_base64 else {}
-                try:
-                    token_resp = requests.get(realm, params=params, headers=token_headers, timeout=10)
-                except Exception:
-                    token_resp = requests.get(realm, params=params, headers=token_headers, timeout=10, verify=False)
+                token_resp = perform_get(realm, token_headers, params)
                 
                 if token_resp.status_code == 200:
                     token = token_resp.json().get("token") or token_resp.json().get("access_token")
                     if token:
                         headers = {"Authorization": f"Bearer {token}"}
-                        try:
-                            response = requests.get(url, headers=headers, timeout=10)
-                        except Exception:
-                            response = requests.get(url, headers=headers, timeout=10, verify=False)
+                        response = perform_get(url, headers)
                     
     return response
 
@@ -350,7 +358,7 @@ def search(params: Params):
             else:
                 harbor_url = f"{parsed.scheme}://{hostname}/api/v2.0/repositories"
             
-            resp = oci_request(harbor_url, auth)
+            resp = oci_request(harbor_url, auth, params.skipTlsVerify)
             if resp.status_code == 200:
                 data = resp.json()
                 repos = data.get("repository") if isinstance(data, dict) else data
@@ -370,7 +378,7 @@ def search(params: Params):
         # 3. Try standard OCI _catalog
         if not discovery_done:
             catalog_url = f"{parsed.scheme}://{hostname}/v2/_catalog"
-            resp = oci_request(catalog_url, auth)
+            resp = oci_request(catalog_url, auth, params.skipTlsVerify)
             if resp.status_code == 200:
                 candidates = resp.json().get("repositories", [])
                 for r in candidates:
@@ -409,7 +417,7 @@ def search(params: Params):
             full_display_name = f"{reg['name']}/{display_name}" if display_name else reg['name']
 
             tags_url = f"{parsed.scheme}://{hostname}/v2/{repo_name}/tags/list"
-            tags_resp = oci_request(tags_url, auth)
+            tags_resp = oci_request(tags_url, auth, params.skipTlsVerify)
             if tags_resp.status_code == 200:
                 tags = tags_resp.json().get("tags", [])
                 if tags:
