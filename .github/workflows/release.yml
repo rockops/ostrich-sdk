@@ -10,6 +10,9 @@ permissions:
   contents: write
   packages: write
 
+env:
+  VERSION: ""
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -36,14 +39,18 @@ jobs:
           mkdir -p bin/linux bin/darwin bin/windows
           
           # Build ostd-cli with version injection for DefaultTag
-          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o bin/linux/ostd ostd-cli/main.go
-          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o bin/darwin/ostd ostd-cli/main.go
-          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o bin/windows/ostd.exe ostd-cli/main.go
+          cd ostd-cli
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/linux/ostd main.go
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/darwin/ostd main.go
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/windows/ostd.exe main.go
+          cd ..
           
           # Build ostr-cli with version injection
-          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o bin/linux/ostr ostr-cli/main.go
-          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o bin/darwin/ostr ostr-cli/main.go
-          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o bin/windows/ostr.exe ostr-cli/main.go
+          cd ostr-cli
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/linux/ostr main.go
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/darwin/ostr main.go
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }}" -o ../bin/windows/ostr.exe main.go
+          cd ..
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
