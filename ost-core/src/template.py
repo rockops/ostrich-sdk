@@ -1,7 +1,6 @@
 import logging
 import os
 import shutil
-import string
 import tempfile
 import unittest
 
@@ -194,7 +193,7 @@ def ensureTmpDir(params: util.Params):
 
 
 
-def saveToTmp(template: string, originalFilename: string,params: util.Params):
+def saveToTmp(template: str, originalFilename: str,params: util.Params):
     
     dest=os.path.abspath(params.tmpdir+"/"+originalFilename)
     destdir=os.path.dirname(dest)
@@ -253,7 +252,7 @@ def packageUsage():
 """)
 
 
-def packageAux(packageDir: string, packageOutput: string, deleteTmpDir: bool):
+def packageAux(packageDir: str, packageOutput: str, deleteTmpDir: bool):
     logging.debug("Packaging template from %s to %s",packageDir,packageOutput)
 
     if(not os.path.isdir(packageDir)):

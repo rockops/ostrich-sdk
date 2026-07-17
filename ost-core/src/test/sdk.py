@@ -7,7 +7,6 @@ from pathlib import Path
 import re
 import requests
 import selectors
-import string
 import subprocess
 import sys
 import time
@@ -43,7 +42,7 @@ UNDER='\033[4m'
 
 
 """ Print indented text """
-def printIndent(lines: string):
+def printIndent(lines: str):
   for line in lines.splitlines():
     if(len(line)>0):
       print("  "+line.rstrip("\r\n ")+"\r\n",end="",flush=True)
@@ -64,7 +63,7 @@ Args:
 Returns:
     the updated yaml content as a dict
 """
-def updateYamlDict(yamlContent: dict, key: string, value: string, yamlValue: bool=False) -> dict :
+def updateYamlDict(yamlContent: dict, key: str, value: str, yamlValue: bool=False) -> dict :
 
     keys = key.split('.')
     d = yamlContent
@@ -128,7 +127,7 @@ Args:
     content: the content to check
     regex: the regex to check
 """
-def checkContentRegex(content: string, regex: string):
+def checkContentRegex(content: str, regex: str):
   logging.info("Checking content for regex %s", regex)
   for line in content.splitlines():
     if(re.match(regex, line)):
@@ -147,7 +146,7 @@ Args:
     outputContent: the expected content in the output as a regex
     noOutputContent: the content that should not be in the output as a regex
 """
-def run(cmd: string, expectedReturnCode: int = None, outputContent: string = None, noOutputContent: string = None):
+def run(cmd: str, expectedReturnCode: int = None, outputContent: str = None, noOutputContent: str = None):
   logging.info("Executing command %s", cmd)
 
 
@@ -339,9 +338,9 @@ Args:
 Returns:
     the Helm template as a dictionary. the key is the name of the object (metadata.name)
 """
-def extractHelmTemplateFromDryRun(output: string) -> dict:
+def extractHelmTemplateFromDryRun(output: str) -> dict:
   inTemplate: bool=False
-  ret: string=""
+  ret: str=""
 
   for line in output.splitlines():
     if(inTemplate and "=== END TEMPLATE ===" not in line):
@@ -370,7 +369,7 @@ Args:
   location: the location of the calling file (use __file__)
   name: the name of the sample application
 """
-def sampleEnv(location: string, name: string):
+def sampleEnv(location: str, name: str):
   os.chdir(getSampleAppPath(location)+ "/"+name)
   logging.info("Changed directory to %s", os.getcwd())
 
@@ -408,7 +407,7 @@ def checkFileContent(filePath, expectedContent, unexpectedContent=None):
 
 
 """ Display the content of a file """
-def cat(filePath: string):
+def cat(filePath: str):
   with open(filePath, "r", encoding="utf-8") as file:
       content = file.read()
       logging.info("Content of %s (len=%d):", os.path.abspath(filePath), len(content))
@@ -422,18 +421,18 @@ def catFilePath(filePath: Path):
 
 
 """ Get the sample configuration """
-def getSampleConfig(file: string):
+def getSampleConfig(file: str):
   with open(os.path.dirname(file)+"/../_doc/ostrich.yaml", "r") as file:
     return file.read()
 
 
 """ Get the path to the sample applications (for integration test) """
-def getSampleAppPath(file: string):
+def getSampleAppPath(file: str):
   return os.path.normpath(os.path.dirname(file)+"/../_samples")
 
 
 """ Get the template configuration """
-def getTemplateConfig(file: string):
+def getTemplateConfig(file: str):
   with open(os.path.dirname(file)+"/../config.yaml", "r") as file:
     return yaml.safe_load(file.read())
 
@@ -451,8 +450,8 @@ def getTemplateConfig(file: string):
                 If False, the result is a single dictionary. Function will fail if the result is not a single YAML document
         display: if True, the output is displayed 
 """
-def helmTemplate(folder: string, file: string="", namespace: string="", values=[], valueFiles=[], helmOptions=[], aslist=False,check=True,display=True) -> any :
-  result: string = helmTemplateAsString(folder, file, namespace, values, valueFiles, helmOptions, check, display)
+def helmTemplate(folder: str, file: str="", namespace: str="", values=[], valueFiles=[], helmOptions=[], aslist=False,check=True,display=True) -> any :
+  result: str = helmTemplateAsString(folder, file, namespace, values, valueFiles, helmOptions, check, display)
   reslist=list(yaml.safe_load_all(result))
 
   logging.info("Found %s objects", len(reslist))
@@ -477,7 +476,7 @@ def helmTemplate(folder: string, file: string="", namespace: string="", values=[
         helmOptions: the additional options to pass to the helm template as ["--set","key1=value1"]
         display: if True, the output is displayed 
 """
-def helmTemplateAsString(folder: string, file: string="", namespace: string="", values=[], valueFiles=[], helmOptions=[],check=True, display=True) -> string :
+def helmTemplateAsString(folder: str, file: str="", namespace: str="", values=[], valueFiles=[], helmOptions=[],check=True, display=True) -> str :
 
   if(len(file)==0):
     logging.info("Helm template folder %s", folder)
@@ -562,7 +561,7 @@ Args:
   expected: the expected value
   regex: if True, the expected value is a regex
 """
-def checkEntry(data: dict, expr: string, expected: string, regex: bool = False):
+def checkEntry(data: dict, expr: str, expected: str, regex: bool = False):
   logging.info('Checking that expression "%s" %s "%s"', expr, ("~" if regex else "="), expected)
 
   jsonpath_expr = parse(expr)
@@ -593,7 +592,7 @@ Args:
   data: the dictionary to check
   expr: the expression to check as a JSON path
 """
-def getEntry(data: dict, expr: string):
+def getEntry(data: dict, expr: str):
   jsonpath_expr = parse(expr)
   ret=[match.value for match in jsonpath_expr.find(data)]
 
@@ -610,7 +609,7 @@ Args:
   data: the dictionary to check
   expr: the expression to check as a JSON path
 """
-def getEntries(data: dict, expr: string):
+def getEntries(data: dict, expr: str):
   jsonpath_expr = parse(expr)
   ret=[match.value for match in jsonpath_expr.find(data)]
   return [match.value for match in jsonpath_expr.find(data)]
@@ -619,27 +618,27 @@ def getEntries(data: dict, expr: string):
 """ 
 Loads a JSON file and returns the content as a dictionary
 """
-def loadJson(filePath: string):
+def loadJson(filePath: str):
   with open(filePath, "r") as file:
     return json.load(file)
 
 """ 
 Loads a YAML file and returns the content as a dictionary
 """
-def loadYaml(filePath: string):
+def loadYaml(filePath: str):
   with open(filePath, "r") as file:
     return yaml.safe_load(file)
 
 """ 
 Parse a YAML string and returns the content as a dictionary
 """
-def parseYaml(content: string):
+def parseYaml(content: str):
   return yaml.safe_load(content)
 
 """
 Parse a YAML string with multiple documents and returns the content as a list of dictionaries
 """
-def parseYamlMultiDoc(content: string) -> dict :
+def parseYamlMultiDoc(content: str) -> dict :
   l=list(yaml.safe_load_all(content))
   ret: dict={}
 
@@ -659,7 +658,7 @@ Args:
     name: the name of the environment variable
     default: the default value if the environment variable is not set
 """
-def getenv(name: string, default: string = None):
+def getenv(name: str, default: str = None):
   ret=os.getenv(name)
   if(ret==None and default==None):
     assert False, f"Environment variable {name} is not set"
@@ -676,7 +675,7 @@ Args:
     url: the URL to request
     expectedReturnCode: the expected return code
 """
-def httpGet(url: string, expectedReturnCode: int = None, showOutput=False, retries=0):
+def httpGet(url: str, expectedReturnCode: int = None, showOutput=False, retries=0):
 
   logging.info(f"Executing HTTP GET request to {url} with {retries} retries")
   attempts=retries+1
@@ -707,7 +706,7 @@ def httpGet(url: string, expectedReturnCode: int = None, showOutput=False, retri
 """
 Deletes a namespace and wait for the deletion to be effective
 """
-def deleteNs(namespace: string):
+def deleteNs(namespace: str):
     # Load kube config
     config.load_kube_config()
 
@@ -741,7 +740,7 @@ def deleteNs(namespace: string):
 """
 Gets a secret
 """
-def getSecret(namespace: string, name: string) -> client.V1Secret:
+def getSecret(namespace: str, name: str) -> client.V1Secret:
     # Load kube config
     config.load_kube_config()
 

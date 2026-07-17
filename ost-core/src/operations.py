@@ -2,7 +2,6 @@ import getpass
 import json
 import logging
 import os
-import string
 
 import src.util as util
 from subprocess import run
@@ -26,7 +25,7 @@ _loglevel: int = logging.INFO
 # Runners implementation
 
 # Execute an operation in the current process
-def inprocess(operation: string, params: util.Params):
+def inprocess(operation: str, params: util.Params):
     """
     Execute a dynamically loaded Python operation file in the current process.
     This function reads and executes a Python script file located at 
@@ -59,21 +58,20 @@ def inprocess(operation: string, params: util.Params):
     """
     logging.info(f"Execute {params.tmpdir}/{operation}/{operation}.py")
     with open(f"{params.tmpdir}/{operation}/{operation}.py","r") as f:
-        global _params
-        _params=params
-        global _dryRun
-        _dryRun=params.dryRun
-        global _localConfig
-        _localConfig=util.loadConf()
-        global _argc, _argv
-        _argv=params.operationParams
-        _argc=len(params.operationParams)
-        global _loglevel
-        _loglevel=params.loglevel
         code=f.read()
 
+        exec_globals = globals().copy()
+        exec_globals.update({
+            "_params": params,
+            "_dryRun": params.dryRun,
+            "_localConfig": util.loadConf(),
+            "_argv": params.operationParams,
+            "_argc": len(params.operationParams),
+            "_loglevel": params.loglevel,
+        })
+
         try:
-            exec(code, globals())
+            exec(code, exec_globals)
         except Exception as e:
             lineNumber: int = None
             # Get the line number
@@ -100,7 +98,7 @@ def inprocess(operation: string, params: util.Params):
 
 
 # Execute an operation locally by running commands defined in a YAML file
-def shell(operation: string, params: util.Params):
+def shell(operation: str, params: util.Params):
     """
     Execute local commands defined in a YAML configuration file.
     
@@ -149,7 +147,7 @@ def shell(operation: string, params: util.Params):
 
 
 # Execute an operation in a container
-def container(operation: string, params: util.Params):
+def container(operation: str, params: util.Params):
     commandFile=f"{params.tmpdir}/{operation}/{operation}.yaml"
     if not os.path.isfile(commandFile):
         raise OstrichException(f"Local command file {commandFile} not found")
@@ -409,7 +407,7 @@ def container(operation: string, params: util.Params):
             raise OstrichException(f"Container command {cmd} failed with code {result.returncode}")
 
 
-def task(operation: string, params: util.Params):
+def task(operation: str, params: util.Params):
 
     if not params.noDeps:
         depfile=f"{params.tmpdir}/{operation}/dependencies.yaml"
@@ -497,7 +495,7 @@ def configUsage():
 
 
 
-def lscred(config: dict, type: string):
+def lscred(config: dict, type: str):
     for k in config.keys():
         spl=k.split("_")
         if(len(spl)>2 and (spl[1] in ["credential"])):

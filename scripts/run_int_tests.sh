@@ -7,6 +7,6 @@
 PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 echo "Running Ostrich SDK integration tests..."
-$PROJECT_ROOT/src/ost template test unit-tests $@
+$PROJECT_ROOT/ost-core/ost template test unit-tests $@
 
 
