@@ -601,8 +601,11 @@ def template(params: util.Params):
                         testUsage()
                         return
                 elif test_args[i] == "--ost":
-                    runner_modes = "ost"
-                    mode_selected = True
+                    if mode_selected and runner_modes == "ostd":
+                        runner_modes = "ost,ostd"
+                    else:
+                        runner_modes = "ost"
+                        mode_selected = True
                 elif test_args[i] == "--ostd":
                     if mode_selected and runner_modes == "ost":
                         runner_modes = "ost,ostd"
@@ -621,7 +624,7 @@ def template(params: util.Params):
                 build_script_dir = os.path.dirname(build_script_abs)
                 build_script_name = os.path.basename(build_script_abs)
                 capture = logging.root.level > logging.DEBUG
-                res = run(["bash", build_script_name, "-n", "unittest"], cwd=build_script_dir, capture_output=capture)
+                res = run(["bash", build_script_name, "-n", "--skip-ssh", "unittest"], cwd=build_script_dir, capture_output=capture)
                 if res.returncode != 0:
                     if capture:
                         logging.error(res.stderr.decode())
