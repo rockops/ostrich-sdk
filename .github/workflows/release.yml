@@ -23,10 +23,14 @@ jobs:
 
       - name: Extract Version
         run: |
-          TAG_NAME=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG_NAME#v}
+          VERSION=$(cat VERSION | tr -d ' \t\r\n')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Building version $VERSION from tag $TAG_NAME"
+          echo "Building version $VERSION from VERSION file"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -73,6 +77,14 @@ jobs:
           
           docker push ghcr.io/$OWNER_LOWER/ostrich-sdk:latest
           docker push ghcr.io/$OWNER_LOWER/ostrich-sdk-ssh:latest
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Build and Push Helm Package
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          ./helm/build.sh ${{ env.VERSION }}
 
       - name: Package Assets for GitHub Release
         run: |

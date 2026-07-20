@@ -6,7 +6,7 @@ set -e
 PUSH=true
 VERSION=""
 
-REGISTRY=${PRIVATE_HELM_REGISTRY:-${PRIVATE_HELM_REGISTRY:-ghcr.io/rockops/helm}}
+REGISTRY=${PRIVATE_HELM_REGISTRY:-ghcr.io/rockops/helm}
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
