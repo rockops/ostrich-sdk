@@ -1,0 +1,16 @@
+plugin:
+  # Name of the plugin
+  name: simple-display
+  # Version of the plugin
+  version: 0.0.1
+  # Short description
+  business_name: A dummy test plugin
+
+template:
+  # Kind of template to use
+  kind: simple
+  # Container runtime to use
+  runtime: docker
+
+  params:
+    message: "This is a message from the plugin configuration"

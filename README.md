@@ -175,6 +175,7 @@ ost config set <key> <value>
 For additional technical specifications, architectural details, and guides:
 
 - [System Description & Architecture (DESCRIPTION.md)](file:///home/ben/src/ostrich/ostrich-sdk/DESCRIPTION.md) - Deep dive into core engine logic, volume mappings, and remote sync.
+- [Plugin Creation Guide (PLUGIN.md)](file:///home/ben/src/ostrich/ostrich-sdk/PLUGIN.md) - Complete guide on how to create, document, test, and publish custom Osplates.
 - [AI & Developer Guide (CLAUDE.md)](file:///home/ben/src/ostrich/ostrich-sdk/CLAUDE.md) - Build scripts, test runner commands, and development workflows.
 - [License (LICENSE)](file:///home/ben/src/ostrich/ostrich-sdk/LICENSE) - Project license information.
 

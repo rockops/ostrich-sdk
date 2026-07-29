@@ -1,0 +1,3 @@
+# default runner for operations in this template
+runner:
+  kind: inprocess

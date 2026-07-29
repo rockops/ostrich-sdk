@@ -1,0 +1,9 @@
+runner:
+  kind: container
+  image: python:3.11-alpine
+commands:
+  - sh -c 'echo "[[ "." | fromTemplate ]]" && ls -l [[ "." | fromTemplate | toUnixPath ]]'
+  - sh -c 'echo TEMPLATE_DIR=$TEMPLATE_DIR'
+  - sh -c 'echo OPERATION=$OPERATION'
+  - sh -c 'ls -l $TEMPLATE_DIR/$OPERATION'
+  - sh -c "export HOME=/tmp && pip install pytest > /dev/null 2>&1 && cd $TEMPLATE_DIR/$OPERATION && python -m pytest -v test_script.py $([ \"$OST_DEBUG_MODE\" = \"true\" ] && echo \"-rP\" || echo \"\")"

@@ -11,3 +11,4 @@ ostr-cli/ostr
 ostd-cli/ostd
 docker/ostrich-sdk/sdk/bin
 bin/
+ostrich-plugins/
