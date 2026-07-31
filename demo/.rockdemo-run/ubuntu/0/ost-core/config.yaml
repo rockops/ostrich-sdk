@@ -1,4 +1,0 @@
-config:
-  docker:
-    # Set your default private registry
-    registry: localhost:5000/ostrich

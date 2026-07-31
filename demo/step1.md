@@ -1,2 +1,0 @@
-## Ostrich SDK demo
-
