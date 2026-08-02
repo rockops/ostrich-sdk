@@ -49,7 +49,13 @@ def get_oci_auth(hostname):
     try:
         with open(config_path, "r") as f:
             auth_config = json.load(f)
-        return auth_config.get("auths", {}).get(hostname, {}).get("auth")
+        auths = auth_config.get("auths", {})
+        if hostname in auths:
+            return auths[hostname].get("auth")
+        host_only = hostname.split(":")[0] if ":" in hostname else hostname
+        if host_only in auths:
+            return auths[host_only].get("auth")
+        return None
     except Exception:
         return None
 
@@ -92,6 +98,12 @@ def oci_request(url, auth_base64, skip_tls_verify=False):
             else:
                 return requests.get(target_url, headers=target_headers, params=target_params, timeout=10, verify=False)
         except requests.exceptions.ConnectionError as conn_err:
+            if target_url.startswith("https://"):
+                http_target = "http://" + target_url[8:]
+                try:
+                    return requests.get(http_target, headers=target_headers, params=target_params, timeout=10, verify=False)
+                except Exception:
+                    pass
             err_str = str(conn_err).lower()
             if "ssl" in err_str or "certificate" in err_str or "certify" in err_str:
                 if not skip_tls_verify:
@@ -211,7 +223,7 @@ def registry(params: Params):
         util.helm(*helm_args)
     elif sub_op == "add":
         args = params.operationParams[1:]
-        force = params.forceTmpDir
+        force = params.forceTmpDir or ("-f" in args) or ("--force" in args)
         
         if "-f" in args:
             force = True
@@ -351,8 +363,9 @@ def search(params: Params):
             url_str = "https://" + url_str
         
         parsed = urlparse(url_str)
-        hostname = parsed.hostname
-        auth = get_oci_auth(hostname)
+        netloc = parsed.netloc or parsed.path.split("/")[0]
+        hostname = parsed.hostname or netloc.split(":")[0]
+        auth = get_oci_auth(netloc)
         path = parsed.path.strip("/")
         
         repo_names = []
@@ -410,9 +423,9 @@ def search(params: Params):
         if not discovery_done:
             harbor_url = None
             if query:
-                harbor_url = f"{parsed.scheme}://{hostname}/api/v2.0/search?q={query}"
+                harbor_url = f"{parsed.scheme}://{netloc}/api/v2.0/search?q={query}"
             else:
-                harbor_url = f"{parsed.scheme}://{hostname}/api/v2.0/repositories"
+                harbor_url = f"{parsed.scheme}://{netloc}/api/v2.0/repositories"
             
             resp = oci_request(harbor_url, auth, skip_verify)
             if resp.status_code == 200:
@@ -433,7 +446,7 @@ def search(params: Params):
 
         # 3. Try standard OCI _catalog
         if not discovery_done:
-            catalog_url = f"{parsed.scheme}://{hostname}/v2/_catalog"
+            catalog_url = f"{parsed.scheme}://{netloc}/v2/_catalog"
             resp = oci_request(catalog_url, auth, skip_verify)
             if resp.status_code == 200:
                 candidates = resp.json().get("repositories", [])

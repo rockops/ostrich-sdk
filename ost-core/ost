@@ -86,7 +86,16 @@ parser.add_argument('--skip-tls-verify', action='store_true')
 parser.add_argument('--version', action='store_true')
 parser.add_argument('-h', '--help', action='store_true')
 
-parsed, remaining = parser.parse_known_args()
+# Pre-process sys.argv for subcommands where -f means --force rather than --file
+argv_copy = list(sys.argv)
+for i, arg in enumerate(argv_copy[1:], start=1):
+    if arg in ['registry', 'config']:
+        for j in range(i + 1, len(argv_copy)):
+            if argv_copy[j] == '-f':
+                argv_copy[j] = '--force'
+        break
+
+parsed, remaining = parser.parse_known_args(argv_copy[1:])
 
 if parsed.version:
     print("ost " + version)
