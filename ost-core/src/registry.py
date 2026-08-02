@@ -173,15 +173,15 @@ def registry(params: Params):
         
         # Extract the registry part (e.g., docker.io/repo -> docker.io)
         registry_url = url
+        is_plain_http = registry_url.startswith("http://")
         if "://" in registry_url:
-            scheme_part, rest = registry_url.split("://", 1)
+            _, rest = registry_url.split("://", 1)
             registry_host = rest.split("/", 1)[0]
-            registry_url = f"{scheme_part}://{registry_host}"
         else:
-            registry_url = registry_url.split("/", 1)[0]
+            registry_host = registry_url.split("/", 1)[0]
 
-        helm_args = ["registry", "login", registry_url]
-        skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+        helm_args = ["registry", "login", registry_host]
+        skip_verify = params.skipTlsVerify or is_plain_http or (target_reg and target_reg.get('insecure', False))
         if skip_verify:
             helm_args.append("--insecure")
         util.helm(*helm_args)
@@ -209,15 +209,15 @@ def registry(params: Params):
         logging.info(f"Logging out from registry: {name} ({url})")
         
         registry_url = url
+        is_plain_http = registry_url.startswith("http://")
         if "://" in registry_url:
-            scheme_part, rest = registry_url.split("://", 1)
+            _, rest = registry_url.split("://", 1)
             registry_host = rest.split("/", 1)[0]
-            registry_url = f"{scheme_part}://{registry_host}"
         else:
-            registry_url = registry_url.split("/", 1)[0]
+            registry_host = registry_url.split("/", 1)[0]
 
-        helm_args = ["registry", "logout", registry_url]
-        skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+        helm_args = ["registry", "logout", registry_host]
+        skip_verify = params.skipTlsVerify or is_plain_http or (target_reg and target_reg.get('insecure', False))
         if skip_verify:
             helm_args.append("--insecure")
         util.helm(*helm_args)
@@ -472,10 +472,11 @@ def search(params: Params):
                     display_name = ""
                 elif repo_name.startswith(path + "/"):
                     display_name = repo_name[len(path):].lstrip("/")
-                elif repo_name == f"{hostname}/{path}":
+                elif repo_name == f"{netloc}/{path}" or repo_name == f"{hostname}/{path}":
                     display_name = ""
-                elif repo_name.startswith(f"{hostname}/{path}/"):
-                    display_name = repo_name[len(f"{hostname}/{path}"):].lstrip("/")
+                elif repo_name.startswith(f"{netloc}/{path}/") or repo_name.startswith(f"{hostname}/{path}/"):
+                    prefix_len = len(f"{netloc}/{path}") if repo_name.startswith(f"{netloc}/{path}") else len(f"{hostname}/{path}")
+                    display_name = repo_name[prefix_len:].lstrip("/")
                 
                 if display_name is None:
                     # Skip repositories outside the configured path
@@ -485,7 +486,7 @@ def search(params: Params):
 
             full_display_name = f"{reg['name']}/{display_name}" if display_name else reg['name']
 
-            tags_url = f"{parsed.scheme}://{hostname}/v2/{repo_name}/tags/list"
+            tags_url = f"{parsed.scheme}://{netloc}/v2/{repo_name}/tags/list"
             tags_resp = oci_request(tags_url, auth, skip_verify)
             if tags_resp.status_code == 200:
                 tags = tags_resp.json().get("tags", [])

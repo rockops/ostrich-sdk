@@ -492,16 +492,27 @@ def template(params: util.Params):
                 logging.info("To add a registry, use: ost registry add <name> <url>")
                 raise OstrichException(f"Registry '{repo_name}' not found")
             
-            if "://" not in repo_url:
-                repo_url = "oci://" + repo_url
+            is_plain_http = repo_url.startswith("http://")
+            if repo_url.startswith("http://"):
+                oci_repo_url = "oci://" + repo_url[7:]
+            elif repo_url.startswith("https://"):
+                oci_repo_url = "oci://" + repo_url[8:]
+            elif not repo_url.startswith("oci://"):
+                oci_repo_url = "oci://" + repo_url
+            else:
+                oci_repo_url = repo_url
 
             with tempfile.TemporaryDirectory() as tmpdir:
-                logging.info(f"Pulling template {template_name} from {repo_url}")
-                helm_args = ["pull", f"{repo_url}/{template_name}", "-d", tmpdir]
+                logging.info(f"Pulling template {template_name} from {oci_repo_url}")
+                helm_args = ["pull", f"{oci_repo_url}/{template_name}", "-d", tmpdir]
                 if version:
                     helm_args.extend(["--version", version])
                 
-                skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+                is_insecure = (target_reg and target_reg.get('insecure', False))
+                if is_plain_http or is_insecure:
+                    helm_args.append("--plain-http")
+                
+                skip_verify = params.skipTlsVerify or is_insecure
                 if skip_verify:
                     helm_args.append("--insecure-skip-tls-verify")
                 
@@ -692,13 +703,24 @@ def template(params: util.Params):
                 else:
                     raise OstrichException(f"Failed to generate package in {tmpdir}")
 
-            if "://" not in repo_url:
-                repo_url = "oci://" + repo_url
+            is_plain_http = repo_url.startswith("http://")
+            if repo_url.startswith("http://"):
+                oci_repo_url = "oci://" + repo_url[7:]
+            elif repo_url.startswith("https://"):
+                oci_repo_url = "oci://" + repo_url[8:]
+            elif not repo_url.startswith("oci://"):
+                oci_repo_url = "oci://" + repo_url
+            else:
+                oci_repo_url = repo_url
             
-            logging.info(f"Publishing {plugin_name} version {version} to {repo_url}")
+            logging.info(f"Publishing {plugin_name} version {version} to {oci_repo_url}")
             try:
-                helm_args = ["push", archive_path, repo_url]
-                skip_verify = params.skipTlsVerify or (target_reg and target_reg.get('insecure', False))
+                helm_args = ["push", archive_path, oci_repo_url]
+                is_insecure = (target_reg and target_reg.get('insecure', False))
+                if is_plain_http or is_insecure:
+                    helm_args.append("--plain-http")
+                
+                skip_verify = params.skipTlsVerify or is_insecure
                 if skip_verify:
                     helm_args.append("--insecure-skip-tls-verify")
                 util.helm(*helm_args)
