@@ -504,17 +504,19 @@ def template(params: util.Params):
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 logging.info(f"Pulling template {template_name} from {oci_repo_url}")
-                helm_args = ["pull", f"{oci_repo_url}/{template_name}", "-d", tmpdir]
-                if version:
-                    helm_args.extend(["--version", version])
+                helm_args = ["pull"]
                 
                 is_insecure = (target_reg and target_reg.get('insecure', False))
                 if is_plain_http or is_insecure:
                     helm_args.append("--plain-http")
-                
-                skip_verify = params.skipTlsVerify or is_insecure
-                if skip_verify:
+                elif params.skipTlsVerify:
                     helm_args.append("--insecure-skip-tls-verify")
+                if target_reg and target_reg.get('extra_args'):
+                    helm_args.extend(target_reg.get('extra_args'))
+
+                helm_args.extend([f"{oci_repo_url}/{template_name}", "-d", tmpdir])
+                if version:
+                    helm_args.extend(["--version", version])
                 
                 util.helm(*helm_args)
                 
@@ -719,10 +721,11 @@ def template(params: util.Params):
                 is_insecure = (target_reg and target_reg.get('insecure', False))
                 if is_plain_http or is_insecure:
                     helm_args.append("--plain-http")
-                
-                skip_verify = params.skipTlsVerify or is_insecure
-                if skip_verify:
+                elif params.skipTlsVerify:
                     helm_args.append("--insecure-skip-tls-verify")
+                if target_reg and target_reg.get('extra_args'):
+                    helm_args.extend(target_reg.get('extra_args'))
+
                 util.helm(*helm_args)
             except OstrichException as e:
                 if "unauthorized" in str(e).lower() or "authentication" in str(e).lower() or "401" in str(e).lower():
