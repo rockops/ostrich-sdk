@@ -228,9 +228,16 @@ def registry(params: Params):
             args.remove("--force")
 
         insecure = False
-        for flag in ["--insecure", "-k", "--skip-tls-verify"]:
+        trusted = False
+
+        if "--insecure" in args:
+            insecure = True
+            while "--insecure" in args:
+                args.remove("--insecure")
+
+        for flag in ["-k", "--skip-tls-verify", "--trust", "--trusted"]:
             if flag in args:
-                insecure = True
+                trusted = True
                 while flag in args:
                     args.remove(flag)
 
@@ -242,6 +249,9 @@ def registry(params: Params):
         url = args[1]
         extra_args = args[2:]
         
+        if url.startswith("http://"):
+            insecure = True
+
         config_dir = os.path.dirname(config_file)
         os.makedirs(config_dir, exist_ok=True)
         
@@ -260,6 +270,8 @@ def registry(params: Params):
         reg_entry = {'name': name, 'url': url}
         if insecure:
             reg_entry['insecure'] = True
+        if trusted:
+            reg_entry['trusted'] = True
         if extra_args:
             reg_entry['extra_args'] = extra_args
 
@@ -267,8 +279,8 @@ def registry(params: Params):
         
         util.safeWriteYaml(config_file, config)
             
-        insecure_info = " [insecure]" if insecure else ""
-        logging.info(f"Registry {name} ({url}){insecure_info} added to configuration")
+        status_info = " [insecure]" if insecure else (" [trusted]" if trusted else "")
+        logging.info(f"Registry {name} ({url}){status_info} added to configuration")
     elif sub_op in ["list", "ls"]:
         registries = load_registries()
         
@@ -278,8 +290,17 @@ def registry(params: Params):
             
         logging.info("Configured registries:")
         for reg in registries:
-            insecure_str = " [insecure]" if reg.get('insecure') else ""
-            print(f"- {reg.get('name')}: {reg.get('url')}{insecure_str}")
+            url = reg.get('url', '')
+            is_http = url.startswith("http://") or (reg.get('insecure', False) and ("localhost" in url or "127.0.0.1" in url or ":5000" in url or url.startswith("http://")))
+            is_trusted = reg.get('trusted', False) or (reg.get('insecure', False) and not is_http)
+            
+            if is_http:
+                tag = " [insecure]"
+            elif is_trusted:
+                tag = " [trusted]"
+            else:
+                tag = ""
+            print(f"- {reg.get('name')}: {url}{tag}")
     elif sub_op == "rm":
         if len(params.operationParams) < 2:
             registryUsage()
@@ -313,7 +334,8 @@ def registry(params: Params):
         found = False
         for reg in registries:
             if reg.get('name') == name:
-                reg['insecure'] = True
+                reg['trusted'] = True
+                reg.pop('insecure', None)
                 found = True
                 break
                 
@@ -366,7 +388,7 @@ def search(params: Params):
         if registry_filter and reg.get('name') != registry_filter:
             continue
 
-        skip_verify = params.skipTlsVerify or reg.get('insecure', False)
+        skip_verify = params.skipTlsVerify or reg.get('trusted', False) or reg.get('insecure', False)
 
         url_str = reg.get('url')
         if "://" not in url_str:
