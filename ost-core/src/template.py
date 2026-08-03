@@ -84,23 +84,62 @@ def getTemplateInfo(templateName):
             
 
 def describePretty(templateName):
-    if os.path.exists(util.getTemplatePath(templateName)+"/_doc/description.md"):
-      cmd=['glow', util.getTemplatePath(templateName)+"/_doc/description.md" ]
-      try:  
-        if(run(cmd).returncode != 0):
-          raise OstrichException("glow failed")
-      except BaseException:
-        print(getTemplateDescription(templateName))
+    desc_path = os.path.join(util.getTemplatePath(templateName), "_doc", "description.md")
+    if not os.path.exists(desc_path):
+        raise OstrichException(f"No description available for {templateName}")
+
+    full_md = getTemplateDescription(templateName)
+
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as tf:
+        tf.write(full_md)
+        temp_path = tf.name
+
+    try:
+        cmd = ['glow', temp_path]
+        if run(cmd).returncode != 0:
+            raise OstrichException("glow failed")
+    except BaseException:
+        print(full_md)
         print("===    Display raw markdown. Consider installing glow  ===")
         print("===             to improve your experience             ===")
-    else:
-        raise OstrichException(f"No description available for {templateName}")
-    
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
 
 def getTemplateDescription(templateName):
     try:
-        with open(util.getTemplatePath(templateName)+"/_doc/description.md","r") as f:
-            return f.read()
+        templatePath = util.getTemplatePath(templateName)
+        desc_path = os.path.join(templatePath, "_doc", "description.md")
+        
+        if not os.path.exists(desc_path):
+            return f"No description available for {templateName}"
+        
+        lines = []
+        with open(desc_path, "r") as f:
+            lines.append(f.read().strip())
+        
+        tasks = []
+        if os.path.isdir(templatePath):
+            for t in sorted(os.listdir(templatePath)):
+                task_dir = os.path.join(templatePath, t)
+                if os.path.isdir(task_dir):
+                    if os.path.isfile(os.path.join(task_dir, f"{t}.py.tmpl")) or os.path.isfile(os.path.join(task_dir, f"{t}.yaml.tmpl")):
+                        tasks.append(t)
+        
+        if tasks:
+            lines.append("## Tasks")
+            for t in tasks:
+                lines.append(f"### {t}")
+                task_desc_path = os.path.join(templatePath, t, "description.md")
+                if os.path.isfile(task_desc_path):
+                    with open(task_desc_path, "r") as f:
+                        lines.append(f.read().strip())
+        
+        return "\n\n".join(lines)
     except OstrichException:
         raise
     except BaseException:
@@ -384,32 +423,8 @@ def template(params: util.Params):
             templateUsage()
             raise OstrichException("Invalid number of parameters")
         name = args[1]
-        templatePath = util.getTemplatePath(name)
         print("====== " + getTemplateBusinessName(name) + " =======")
         describePretty(name)
-        print("")
-        print("Available tasks:")
-        for t in sorted(os.listdir(templatePath)):
-            task_dir = os.path.join(templatePath, t)
-            if os.path.isdir(task_dir):
-                if os.path.isfile(os.path.join(task_dir, f"{t}.py.tmpl")) or os.path.isfile(os.path.join(task_dir, f"{t}.yaml.tmpl")):
-                    print("- " + t)
-                    desc_path = os.path.join(task_dir, "description.md")
-                    if os.path.isfile(desc_path):
-                        try:
-                            # Try to use glow for pretty printing
-                            if run(['glow', '--version'], capture_output=True).returncode == 0:
-                                run(['glow', desc_path])
-                            else:
-                                with open(desc_path, 'r') as f:
-                                    print("  " + f.read().replace('\n', '\n  ').strip())
-                        except Exception:
-                            try:
-                                with open(desc_path, 'r') as f:
-                                    print("  " + f.read().replace('\n', '\n  ').strip())
-                            except Exception:
-                                pass
-                        print("")
 
     elif sub == "config":
         if len(args) < 2:
