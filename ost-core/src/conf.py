@@ -13,8 +13,11 @@ def loadConf():
     # Load relative to this module's file location (src/conf.py -> config.yaml is in parent)
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     config_path = os.path.join(base_dir, "config.yaml")
+    if not os.path.exists(config_path):
+        config_path = os.path.join(util.root(), "config.yaml")
     with open(config_path, "r") as f:
         parsedConfig = yaml.safe_load(f)
+
 
 
 # Gets the conf key :

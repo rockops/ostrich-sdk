@@ -38,7 +38,24 @@ To build the CLI binaries (`ostd` and `ostr`), run the build script:
 ```
 The compiled binaries for Linux, macOS, and Windows will be placed in the `bin/` directory. Copy the appropriate binaries to your system `PATH` (e.g. `/usr/local/bin/`).
 
-### 2. Running Tasks Locally with `ostd`
+### 2. Installing Python Engine via `pip`
+To install the `ost` Python CLI and engine directly onto your host machine or virtual environment:
+
+```bash
+# Install locally in editable mode
+pip install -e .
+
+# Or install standard package from repository
+pip install .
+```
+Verify the installation:
+```bash
+ost --version
+ost help
+```
+
+
+### 3. Running Tasks Locally with `ostd`
 Using `ostd` allows you to execute deployment tasks locally without setting up the core Python environment on your host machine.
 
 ```bash
