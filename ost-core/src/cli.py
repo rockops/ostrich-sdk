@@ -54,17 +54,17 @@ Registry operations:
 def main():
     _src_dir = os.path.dirname(os.path.abspath(__file__))
     _script_dir = os.path.dirname(_src_dir)
-    _version_file = os.path.join(_script_dir, "VERSION")
+    _version_file = os.path.join(_src_dir, "VERSION")
+    if not os.path.exists(_version_file):
+        _version_file = os.path.join(_script_dir, "VERSION")
+    if not os.path.exists(_version_file):
+        _version_file = os.path.join(os.path.dirname(_script_dir), "VERSION")
+    
     if os.path.exists(_version_file):
         with open(_version_file, "r") as _f:
             version = _f.read().strip()
     else:
-        _repo_version_file = os.path.join(os.path.dirname(_script_dir), "VERSION")
-        if os.path.exists(_repo_version_file):
-            with open(_repo_version_file, "r") as _f:
-                version = _f.read().strip()
-        else:
-            version = "0.0.0-dev"
+        version = "0.0.0-dev"
 
     logformat = '%(levelname)s - %(message)s'
     loglevel = logging.INFO

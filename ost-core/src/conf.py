@@ -10,9 +10,10 @@ parsedConfig: Any=None
 def loadConf():
     global parsedConfig
 
-    # Load relative to this module's file location (src/conf.py -> config.yaml is in parent)
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    config_path = os.path.join(base_dir, "config.yaml")
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(src_dir, "config.yaml")
+    if not os.path.exists(config_path):
+        config_path = os.path.join(os.path.dirname(src_dir), "config.yaml")
     if not os.path.exists(config_path):
         config_path = os.path.join(util.root(), "config.yaml")
     with open(config_path, "r") as f:

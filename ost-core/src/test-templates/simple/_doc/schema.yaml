@@ -1,0 +1,17 @@
+type: object
+required: [plugin, template]
+properties:
+  plugin:
+    type: object
+    required: [name, version]
+    properties:
+      name: { type: string, pattern: "^[a-z0-9-]+$" }
+      version: { type: string }
+  template:
+    type: object
+    required: [kind]
+    properties:
+      kind: { type: string }
+      runtime: 
+        type: string
+        enum: ["docker", "podman"]

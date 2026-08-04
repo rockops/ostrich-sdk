@@ -1,0 +1,8 @@
+# Command with overriden image
+
+runner:
+   kind: container
+   image: alpine
+commands:
+  - cmd: cat /etc/os-release
+    image: debian:stable-slim

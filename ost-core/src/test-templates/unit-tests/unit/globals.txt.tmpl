@@ -1,0 +1,11 @@
+get:[[ get("template.params.sub.valSub") ]]
+_:[[ _("template.params.sub.valSub") ]]
+_2:[[ _("template.params.subNoExist.valSub") ]]
+_3:[[ _("template.params.sub.noExist.valSub") ]]
+
+[% if template.params.raise %]
+[[ raise(template.params.raise) ]]
+[% endif %]
+
+debug:[[ isDebugEnabled() ]]
+---
