@@ -203,7 +203,17 @@ def runcheck(cmd):
         raise OstrichException(f"Error executing command {' '.join(cmd)}")
 
 def root():
-    return os.path.abspath(os.path.dirname(sys.argv[0]))
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    if os.path.exists(os.path.join(src_dir, "templates")):
+        return src_dir
+    pkg_dir = os.path.dirname(src_dir)
+    if os.path.exists(os.path.join(pkg_dir, "templates")):
+        return pkg_dir
+    argv_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+    if os.path.exists(os.path.join(argv_dir, "templates")):
+        return argv_dir
+    return src_dir
+
 
 def extraTemplateRoot():
     return getConfigRoot()+"/templates"

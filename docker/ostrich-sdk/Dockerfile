@@ -60,17 +60,13 @@ RUN apt-get install -y nano vim rsync git inetutils-ping telnet curl sudo bash-c
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install dependencies
-COPY sdk/requirements.txt /sdk/requirements.txt
+# Copy SDK source and install dependencies
+COPY sdk /sdk
 WORKDIR /sdk
 
 # Python deps
-RUN mkdir /data && \
-    /python-sdk/bin/pip install -r requirements.txt
-
-# Copy sdk
-COPY sdk /sdk
-RUN mkdir -p /sdk/k8s
+RUN mkdir -p /data /sdk/k8s && \
+    /python-sdk/bin/pip install .
 
 EXPOSE 22
 

@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ostrich-sdk"
+dynamic = ["version"]
+description = "Ostrich SDK Core CLI and Templating Engine"
+readme = "README.md"
+authors = [
+    { name = "Ostrich Team" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "cachetools>=6.0.0",
+    "certifi>=2024.0.0",
+    "charset-normalizer>=3.0.0",
+    "go-template>=0.0.3",
+    "google-auth>=2.0.0",
+    "idna>=3.0",
+    "kubernetes>=28.0.0",
+    "oauthlib>=3.2.0",
+    "pyasn1>=0.5.0",
+    "pyasn1-modules>=0.3.0",
+    "python-dateutil>=2.8.0",
+    "PyYAML>=6.0",
+    "requests>=2.31.0",
+    "requests-oauthlib>=1.3.0",
+    "rsa>=4.9",
+    "six>=1.16.0",
+    "urllib3>=2.0.0",
+    "websocket-client>=1.6.0",
+    "tqdm>=4.66.0",
+    "jinja2>=3.1.0",
+    "MarkupSafe>=2.1.0",
+    "jsonpath-ng>=1.6.0",
+    "pytest>=7.0.0",
+    "colorama>=0.4.6",
+    "pytest-cov>=4.0.0",
+    "semver>=3.0.0",
+    "glom>=23.0.0",
+    "jsonschema>=4.20.0",
+    "envsubst"
+]
+
+[project.scripts]
+ost = "src.cli:main"
+
+[tool.setuptools.dynamic]
+version = {file = ["VERSION"]}
+
+[tool.setuptools.packages.find]
+where = ["ost-core"]
+include = ["src*"]
+
+[tool.setuptools.package-data]
+src = ["config.yaml", "templates/**/*", "test-templates/**/*", "VERSION"]
+

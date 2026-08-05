@@ -12,3 +12,7 @@ ostd-cli/ostd
 docker/ostrich-sdk/sdk/bin
 bin/
 ostrich-plugins/
+*.egg-info/
+*.egg
+build/
+dist/

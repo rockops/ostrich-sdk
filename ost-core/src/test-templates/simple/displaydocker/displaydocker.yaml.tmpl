@@ -1,0 +1,53 @@
+runner:
+  kind: container
+  image: alpine:latest
+
+commands:
+- pwd
+
+commands2:
+- cmd:
+  - /bin/sh
+  - -c
+  - |
+    echo ${TEST_VAR}
+    pwd
+    cat ostrich.yaml
+    cat ${TEMPLATE_DIR}/${OPERATION}/data.txt
+    touch test.txt
+    ls -la
+
+- cmd: ["-c","echo Hello from container"]
+  image: alpine/curl:latest
+  entrypoint: /bin/sh
+
+- cmd:
+  - /bin/sh
+  - -c
+  - echo [[ "folder" | here ]]
+
+- cmd:
+  - /bin/sh
+  - -c
+  - |
+    set -e
+    ls -la
+    echo 'Plugin [[ plugin.name ]]. Message is "[[ template.params.message ]]"'
+    echo LOGLEVEL is set to ${LOGLEVEL}
+    echo DRYRUN is set to ${DRYRUN}
+    cat ${TEMPLATE_DIR}/${OPERATION}/data.txt
+    echo "Number of operation parameters=${ARGC}"
+    echo "Operation parameters (comma separated)=${ARGV}"
+    echo "Operation parameters (JSON)=${ARGV_JSON}"
+    for i in $(seq 0 $((${ARGC}-1))); do
+      echo "Parameter $i is: $(echo ${ARGV_JSON} | jq -r ".[$i]")"
+    done
+  image: kurrier/alpine-jq:latest
+
+- pwd
+- ls -la
+- echo plop
+
+env:
+  TEST_VAR: "Hello from displaydocker template"
+
