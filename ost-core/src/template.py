@@ -648,7 +648,16 @@ def template(params: util.Params):
 
             if "ostd" in runner_modes:
                 logging.info("Building local Docker image for testing (tag: unittest)...")
-                build_script_abs = os.path.normpath(os.path.join(util.root(), "..", "docker", "ostrich-sdk", "build.sh"))
+                curr_path = util.root()
+                build_script_abs = None
+                for _ in range(4):
+                    candidate = os.path.normpath(os.path.join(curr_path, "docker", "ostrich-sdk", "build.sh"))
+                    if os.path.exists(candidate):
+                        build_script_abs = candidate
+                        break
+                    curr_path = os.path.dirname(curr_path)
+                if not build_script_abs:
+                    build_script_abs = os.path.normpath(os.path.join(util.root(), "..", "docker", "ostrich-sdk", "build.sh"))
                 build_script_dir = os.path.dirname(build_script_abs)
                 build_script_name = os.path.basename(build_script_abs)
                 capture = logging.root.level > logging.DEBUG
