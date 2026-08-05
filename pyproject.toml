@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ostrich-sdk"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Ostrich SDK Core CLI and Templating Engine"
 readme = "README.md"
 authors = [
@@ -34,7 +34,9 @@ dependencies = [
     "jinja2>=3.1.0",
     "MarkupSafe>=2.1.0",
     "jsonpath-ng>=1.6.0",
+    "pytest>=7.0.0",
     "colorama>=0.4.6",
+    "pytest-cov>=4.0.0",
     "semver>=3.0.0",
     "glom>=23.0.0",
     "jsonschema>=4.20.0",
@@ -44,9 +46,13 @@ dependencies = [
 [project.scripts]
 ost = "src.cli:main"
 
+[tool.setuptools.dynamic]
+version = {file = ["VERSION"]}
+
 [tool.setuptools.packages.find]
 where = ["ost-core"]
 include = ["src*"]
 
 [tool.setuptools.package-data]
 src = ["config.yaml", "templates/**/*", "test-templates/**/*", "VERSION"]
+
