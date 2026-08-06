@@ -67,7 +67,7 @@ The workflow is configured to automatically use `secrets.PYPI_API_TOKEN` if pres
 
 The release process follows the standard Ostrich SDK release workflow (`pr_and_release_workflow` skill):
 
-1. **Update `VERSION`**: Update `VERSION` and `ost-core/src/VERSION` (e.g. `0.2.0`).
+1. **Update `VERSION`**: Update `VERSION` at the repository root (e.g. `0.2.0`).
 2. **Merge PR to `main`**: Merge feature branch into `main`.
 3. **Create & Push Tag**:
    ```bash

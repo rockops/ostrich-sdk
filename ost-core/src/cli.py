@@ -52,18 +52,26 @@ Registry operations:
 
 
 def main():
-    _src_dir = os.path.dirname(os.path.abspath(__file__))
-    _script_dir = os.path.dirname(_src_dir)
-    _version_file = os.path.join(_src_dir, "VERSION")
-    if not os.path.exists(_version_file):
-        _version_file = os.path.join(_script_dir, "VERSION")
-    if not os.path.exists(_version_file):
-        _version_file = os.path.join(os.path.dirname(_script_dir), "VERSION")
-    
-    if os.path.exists(_version_file):
-        with open(_version_file, "r") as _f:
-            version = _f.read().strip()
-    else:
+    try:
+        from importlib.metadata import version as _get_version, PackageNotFoundError as _PkgNotFound
+        try:
+            version = _get_version("ostrich-sdk")
+        except _PkgNotFound:
+            version = None
+    except ImportError:
+        version = None
+
+    if not version:
+        _curr = os.path.dirname(os.path.abspath(__file__))
+        for _ in range(4):
+            _version_file = os.path.join(_curr, "VERSION")
+            if os.path.exists(_version_file):
+                with open(_version_file, "r") as _f:
+                    version = _f.read().strip()
+                break
+            _curr = os.path.dirname(_curr)
+
+    if not version:
         version = "0.0.0-dev"
 
     logformat = '%(levelname)s - %(message)s'
