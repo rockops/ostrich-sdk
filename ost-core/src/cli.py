@@ -52,24 +52,30 @@ Registry operations:
 
 
 def main():
-    try:
-        from importlib.metadata import version as _get_version, PackageNotFoundError as _PkgNotFound
-        try:
-            version = _get_version("ostrich-sdk")
-        except _PkgNotFound:
-            version = None
-    except ImportError:
-        version = None
+    version = None
+    _curr = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(4):
+        _version_file = os.path.join(_curr, "VERSION")
+        if os.path.exists(_version_file):
+            try:
+                with open(_version_file, "r") as _f:
+                    v = _f.read().strip()
+                    if v:
+                        version = v
+                        break
+            except Exception:
+                pass
+        _curr = os.path.dirname(_curr)
 
     if not version:
-        _curr = os.path.dirname(os.path.abspath(__file__))
-        for _ in range(4):
-            _version_file = os.path.join(_curr, "VERSION")
-            if os.path.exists(_version_file):
-                with open(_version_file, "r") as _f:
-                    version = _f.read().strip()
-                break
-            _curr = os.path.dirname(_curr)
+        try:
+            from importlib.metadata import version as _get_version, PackageNotFoundError as _PkgNotFound
+            try:
+                version = _get_version("ostrich-sdk")
+            except _PkgNotFound:
+                version = None
+        except ImportError:
+            version = None
 
     if not version:
         version = "0.0.0-dev"
