@@ -1,50 +1,58 @@
 ---
 name: pr_and_release_workflow
-description: Automate the Ostrich SDK development workflow, including bumping version in VERSION file, building Go binaries, Docker images, and Helm packages, running local tests, creating PRs, merging to main, and pushing vX.Y.Z release tags to trigger PyPI publishing and GitHub releases.
+description: Automate the Ostrich SDK development lifecycle, including dev branch creation with -dev version suffix, local testing, PR creation, merging to main (NEVER push directly to main), tagging vX.Y.Z release tags, and initializing the next dev branch.
 ---
 
-# Ostrich SDK Development, Pull Request, and Release Workflow
+# Ostrich SDK Development, Branching, PR, and Release Workflow
 
-Use this skill when executing the standard development, version bumping, testing, PR merging, and release process for the Ostrich SDK.
+Use this skill when developing features, managing versions, creating Pull Requests, merging to `main`, tagging releases, or initializing new development cycles for the Ostrich SDK.
 
----
-
-## 🔄 Release Workflow Steps
-
-### Step 1: Version Bumping
-1. Read the target version requested by the user, or read the current version from the single root [VERSION](file:///home/ben/src/ostrich/ostrich-sdk/VERSION) file and bump it to the next target version (e.g., `0.2.0`).
-2. Update the root `VERSION` file with the exact target release version `X.Y.Z`.
+> [!IMPORTANT]
+> **STRICT RULE**: **NEVER push directly to `main`**. All development, version updates, and feature changes MUST take place inside a development branch (`dev/<version>`) and be merged into `main` via GitHub Pull Requests.
 
 ---
 
-### Step 2: Develop, Stage, and Push Branch
-1. Ensure all changes (features, bug fixes, version updates) are included in the current development branch (`dev/<feature-name>` or `feat/<feature-name>`).
-2. Commit all staged changes:
+## 🔄 Lifecycle Steps
+
+### Phase 1: Start New Development Iteration
+When starting development for a new version `<target-version>` (e.g., `0.2.2`):
+1. Ensure `main` is up to date:
    ```bash
-   git add -A
-   git commit -m "feat: release version <X.Y.Z>"
-   git push -u origin <branch-name>
+   git checkout main
+   git pull
+   ```
+2. Create and switch to the development branch:
+   ```bash
+   git checkout -b dev/<target-version>
+   ```
+3. Update the single root [VERSION](file:///home/ben/src/ostrich/ostrich-sdk/VERSION) file to append the `-dev` suffix:
+   ```text
+   <target-version>-dev
+   ```
+4. Commit and push the new development branch to GitHub:
+   ```bash
+   git add VERSION
+   git commit -m "chore: bump version to <target-version>-dev"
+   git push -u origin dev/<target-version>
    ```
 
 ---
 
-### Step 3: Local Build, Helm Package Generation & Integration Tests
-Before submitting a PR, verify changes locally to ensure existing features remain intact:
+### Phase 2: Development & Local Verification
+Develop code in `dev/<target-version>`. Before opening a PR or releasing:
 1. Compile current Go CLI binaries:
    ```bash
-   cd scripts
-   ./build.sh
-   cd ..
+   cd scripts && ./build.sh && cd ..
    ```
 2. Build the Docker image locally under a `test` tag:
    ```bash
    ./docker/ostrich-sdk/build.sh -n test
    ```
-3. Generate the local Helm chart package (reading version automatically from root `VERSION` file):
+3. Generate local Helm chart package (reading version automatically from root `VERSION` file):
    ```bash
    ./helm/build.sh -n
    ```
-4. Run integration tests on both local Python (`host`) and containerized (`ostd`) runners:
+4. Run host and container integration test suite:
    ```bash
    export PYTHONPATH=$(pwd)/ost-core:$PYTHONPATH
    export OST_IMAGE_TAG=test
@@ -53,43 +61,47 @@ Before submitting a PR, verify changes locally to ensure existing features remai
 
 ---
 
-### Step 4: Create PR and Merge into `main`
-1. Create a Pull Request from `<branch-name>` to `main` via the GitHub CLI:
+### Phase 3: Release Execution
+When asked to make a release (e.g. `0.2.2`):
+1. **Clean Version Suffix**: Update [VERSION](file:///home/ben/src/ostrich/ostrich-sdk/VERSION) by removing `-dev` (e.g. changing `0.2.2-dev` to `0.2.2`).
+2. **Commit & Push Branch**:
    ```bash
-   gh pr create --title "feat: release version <X.Y.Z>" --body "Release version <X.Y.Z> containing latest updates and PyPI packaging." --base main --head <branch-name>
+   git add -A
+   git commit -m "feat: release version <target-version>"
+   git push origin dev/<target-version>
    ```
-2. Merge the Pull Request into `main`:
+3. **Create PR to `main`**:
+   ```bash
+   gh pr create --title "feat: release version <target-version>" --body "Release version <target-version>." --base main --head dev/<target-version>
+   ```
+4. **Merge PR into `main`**:
    ```bash
    gh pr merge --merge --delete-branch
    ```
-
----
-
-### Step 5: Tag `main` Branch (`vX.Y.Z`) and Publish Release
-1. Checkout `main` and pull the merged commit:
+5. **Tag `main` (`v<target-version>`)**:
    ```bash
    git checkout main
    git pull
+   git tag v<target-version>
+   git push origin v<target-version>
    ```
-2. Read the version from [VERSION](file:///home/ben/src/ostrich/ostrich-sdk/VERSION) (e.g. `X.Y.Z`).
-3. Tag `main` with `vX.Y.Z` and push the tag to GitHub:
-   ```bash
-   git tag v<X.Y.Z>
-   git push origin v<X.Y.Z>
-   ```
+   *Pushing tag `v<target-version>` triggers PyPI publication (`pypi-publish.yml`) and GitHub Release / Docker / Helm image builds (`release.yml`).*
 
 ---
 
-## ⚡ Automated CI/CD Pipelines Triggered
-
-Pushing the `v<X.Y.Z>` tag to GitHub automatically triggers two release pipelines:
-
-1. **PyPI Publish (`.github/workflows/pypi-publish.yml`)**:
-   - Builds source distribution (`.tar.gz`) and wheel (`.whl`).
-   - Publishes `ostrich-sdk` version `X.Y.Z` to PyPI (`pip install ostrich-sdk==X.Y.Z`).
-
-2. **Release Build (`.github/workflows/release.yml`)**:
-   - Compiles Go CLI binaries (`ostd` and `ostr`) for Linux, macOS, and Windows.
-   - Builds and pushes Docker images (`ostrich-sdk:X.Y.Z` and `ostrich-sdk-ssh:X.Y.Z`) to GHCR.
-   - Packages and pushes the Helm chart package (`ostrich-sdk-X.Y.Z.tgz`).
-   - Creates a GitHub Release tagged `vX.Y.Z` attaching the `ostd` and `ostr` CLI binaries.
+### Phase 4: Post-Release Next Dev Initialization
+Immediately after tagging and publishing `<target-version>`:
+1. Compute the next patch version `<next-version>` (e.g. `0.2.3`).
+2. Checkout `main` and create new branch `dev/<next-version>`:
+   ```bash
+   git checkout main
+   git pull
+   git checkout -b dev/<next-version>
+   ```
+3. Update [VERSION](file:///home/ben/src/ostrich/ostrich-sdk/VERSION) to `<next-version>-dev` (e.g. `0.2.3-dev`).
+4. Commit and push:
+   ```bash
+   git add VERSION
+   git commit -m "chore: bump version to <next-version>-dev"
+   git push -u origin dev/<next-version>
+   ```
