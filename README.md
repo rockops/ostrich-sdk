@@ -69,6 +69,15 @@ Using `ostd` allows you to execute deployment tasks locally without setting up t
 # Check version
 ostd --version
 
+# Show current default Docker image
+ostd image show
+
+# Set custom default Docker image & tag
+ostd image ghcr.io/rockops/ostrich-sdk:0.2.1
+
+# Remove custom image setting (revert to default)
+ostd image --rm
+
 # List available templates
 ostd template list
 
