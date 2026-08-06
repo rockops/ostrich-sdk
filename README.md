@@ -39,13 +39,18 @@ To build the CLI binaries (`ostd` and `ostr`), run the build script:
 The compiled binaries for Linux, macOS, and Windows will be placed in the `bin/` directory. Copy the appropriate binaries to your system `PATH` (e.g. `/usr/local/bin/`).
 
 ### 2. Installing Python Engine via `pip`
-To install the `ost` Python CLI and engine directly onto your host machine or virtual environment:
+To install the `ost` Python CLI and engine directly from PyPI:
 
+```bash
+pip install ostrich-sdk
+```
+
+Or install from local repository source:
 ```bash
 # Install locally in editable mode
 pip install -e .
 
-# Or install standard package from repository
+# Or install standard package from local source
 pip install .
 ```
 Verify the installation:
@@ -53,6 +58,8 @@ Verify the installation:
 ost --version
 ost help
 ```
+
+> 📘 **Developer Guide**: For instructions on setting up PyPI publishing credentials and automated GitHub Action releases, see [PYPI.md](PYPI.md).
 
 
 ### 3. Running Tasks Locally with `ostd`
