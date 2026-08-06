@@ -46,6 +46,11 @@ RUN wget https://github.com/mikefarah/yq/releases/download/v4.23.1/yq_linux_amd6
     mv yq_linux_amd64 /usr/local/bin/yq4 && \
     /python-sdk/bin/pip install yq==2.11.1
 
+RUN GLOW_VERSION=2.1.2 && \
+    wget https://github.com/charmbracelet/glow/releases/download/v${GLOW_VERSION}/glow_${GLOW_VERSION}_amd64.deb && \
+    dpkg -i glow_${GLOW_VERSION}_amd64.deb && \
+    rm glow_${GLOW_VERSION}_amd64.deb
+
 RUN mkdir /tmp/kube && cd /tmp/kube && VER=0.9.4 && \
     wget https://github.com/ahmetb/kubectx/releases/download/v${VER}/kubectx_v${VER}_linux_x86_64.tar.gz && \
     wget https://github.com/ahmetb/kubectx/releases/download/v${VER}/kubens_v${VER}_linux_x86_64.tar.gz && \
