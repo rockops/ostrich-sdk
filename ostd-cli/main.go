@@ -43,19 +43,21 @@ var (
 )
 
 func usage() {
-	os.Stderr.WriteString("Usage: ostd [options] [command]\n\n")
-	os.Stderr.WriteString("Options:\n")
-	fmt.Fprintf(os.Stderr, "  --image <image>  The Docker image to use (default: %s)\n", DefaultImage)
-	fmt.Fprintf(os.Stderr, "  --tag <tag>      The Docker tag to use (default: %s)\n", DefaultTag)
-	os.Stderr.WriteString("  -e <variable=value> Set an environment variable\n")
-	os.Stderr.WriteString("  -d               Enable debug logging\n")
-	os.Stderr.WriteString("  -h, --help       Show this help\n\n")
-	os.Stderr.WriteString("Commands:\n")
-	os.Stderr.WriteString("  sh                                Open a shell in the container\n")
-	os.Stderr.WriteString("  image <image[:tag]>               Set default image (e.g. ostd image ghcr.io/rockops/ostrich-sdk:0.2.1)\n")
-	os.Stderr.WriteString("  image show                        Print the Docker image that will be used\n")
-	os.Stderr.WriteString("  image --rm                        Remove the custom image setting\n")
-	os.Stderr.WriteString("  <ost command>                     Any valid ost command\n")
+	fmt.Println("Usage: ostd [options] [command]")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Printf("  --image <image>  The Docker image to use (default: %s)\n", DefaultImage)
+	fmt.Printf("  --tag <tag>      The Docker tag to use (default: %s)\n", DefaultTag)
+	fmt.Println("  -e <variable=value> Set an environment variable")
+	fmt.Println("  -d               Enable debug logging")
+	fmt.Println("  -h, --help       Show this help")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  sh                                Open a shell in the container")
+	fmt.Println("  image <image[:tag]>               Set default image (e.g. ostd image ghcr.io/rockops/ostrich-sdk:0.2.1)")
+	fmt.Println("  image show                        Print the Docker image that will be used")
+	fmt.Println("  image --rm                        Remove the custom image setting")
+	fmt.Println("  <ost command>                     Any valid ost command")
 }
 
 func toUnixPath(path string) string {
@@ -112,16 +114,19 @@ func main() {
 	var ostArgs []string
 	debug := false
 	showImage := false
+	showHelp := false
 
 	// First pass to detect debug and help
 	tempArgs := os.Args[1:]
+	if len(tempArgs) == 0 {
+		showHelp = true
+	}
 	for _, arg := range tempArgs {
 		if arg == "-d" || arg == "--debug" {
 			debug = true
 		}
-		if arg == "-h" || arg == "--help" {
-			usage()
-			os.Exit(0)
+		if arg == "-h" || arg == "--help" || arg == "help" {
+			showHelp = true
 		}
 	}
 
@@ -175,9 +180,11 @@ func main() {
 				os.Exit(1)
 			}
 		case "-h", "--help":
-			usage()
-			os.Exit(0)
+			showHelp = true
 		default:
+			if arg == "help" {
+				showHelp = true
+			}
 			ostArgs = append(ostArgs, arg)
 		}
 	}
@@ -260,6 +267,30 @@ func main() {
 		}
 		slog.Info(fmt.Sprintf("Default image updated to: %s", newImage))
 		os.Exit(0)
+	}
+
+	if showHelp {
+		usage()
+		fmt.Println()
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println("ostd executes any ost command inside a Docker container.")
+		fmt.Println("The underlying ost engine operations are listed below:")
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println()
+		if len(ostArgs) == 0 {
+			ostArgs = []string{"help"}
+		} else {
+			hasHelp := false
+			for _, a := range ostArgs {
+				if a == "help" || a == "-h" || a == "--help" {
+					hasHelp = true
+					break
+				}
+			}
+			if !hasHelp {
+				ostArgs = append(ostArgs, "help")
+			}
+		}
 	}
 
 	if len(ostArgs) > 0 && ostArgs[0] == "sh" {
