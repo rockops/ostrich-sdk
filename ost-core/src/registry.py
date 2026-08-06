@@ -34,7 +34,7 @@ def load_registries():
 def registryUsage():
     print("""Usage: ost registry <command> [parameters]
 Available commands:
-  - login <name> : login to an OCI registry
+  - login [<name>] [-u username] [-p password | --password-stdin] : login to an OCI registry
   - logout <name> : logout from an OCI registry
   - add [-f] <name> <url> [--insecure] [helm_options...] : add a registry to the configuration. Use -f to override.
   - list : list all configured registries
@@ -145,18 +145,65 @@ def registry(params: Params):
 
     sub_op = params.operationParams[0]
     if sub_op == "login":
-        if len(params.operationParams) < 2:
+        args = list(params.operationParams[1:])
+        username = None
+        password = None
+        password_stdin = False
+        positional = []
+
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg == "--password-stdin":
+                password_stdin = True
+                i += 1
+            elif arg in ["-u", "--username"]:
+                if i + 1 < len(args):
+                    username = args[i + 1]
+                    i += 2
+                else:
+                    raise OstrichException("Option -u/--username requires an argument")
+            elif arg.startswith("-u="):
+                username = arg.split("=", 1)[1]
+                i += 1
+            elif arg.startswith("--username="):
+                username = arg.split("=", 1)[1]
+                i += 1
+            elif arg in ["-p", "--password"]:
+                if i + 1 < len(args):
+                    password = args[i + 1]
+                    i += 2
+                else:
+                    raise OstrichException("Option -p/--password requires an argument")
+            elif arg.startswith("-p="):
+                password = arg.split("=", 1)[1]
+                i += 1
+            elif arg.startswith("--password="):
+                password = arg.split("=", 1)[1]
+                i += 1
+            elif arg.startswith("-"):
+                raise OstrichException(f"Unknown flag for login: {arg}")
+            else:
+                positional.append(arg)
+                i += 1
+
+        if password and password_stdin:
+            raise OstrichException("Cannot specify both -p/--password and --password-stdin")
+
+        if len(positional) > 1:
             registryUsage()
-            raise OstrichException("Invalid number of parameters")
-        name = params.operationParams[1]
+            raise OstrichException("Too many arguments for registry login")
+        elif len(positional) == 1:
+            name = positional[0]
+        else:
+            name = "ostrich"
         
         registries = load_registries()
 
-        
         url = None
         target_reg = None
         for reg in registries:
-            if reg.get('name') == name:
+            if reg.get('name') == name or reg.get('url') == name:
                 url = reg.get('url')
                 target_reg = reg
                 break
@@ -178,6 +225,12 @@ def registry(params: Params):
             registry_host = registry_url.split("/", 1)[0]
 
         helm_args = ["registry", "login", registry_host]
+        if username:
+            helm_args.extend(["-u", username])
+        if password_stdin:
+            helm_args.append("--password-stdin")
+        elif password:
+            helm_args.extend(["-p", password])
         skip_verify = params.skipTlsVerify or is_plain_http or (target_reg and target_reg.get('insecure', False))
         if skip_verify:
             helm_args.append("--insecure")

@@ -766,7 +766,21 @@ def helm(*args: str) -> None:
         check=False,
     )
     if result.returncode != 0:
-        raise OstrichException(f"Error executing helm {' '.join(args)}")
+        sanitized_args = []
+        skip_next = False
+        for a in args:
+            if skip_next:
+                skip_next = False
+                sanitized_args.append("***")
+            elif a in ("-p", "--password"):
+                sanitized_args.append(a)
+                skip_next = True
+            elif a.startswith("-p=") or a.startswith("--password="):
+                prefix = a.split("=", 1)[0]
+                sanitized_args.append(f"{prefix}=***")
+            else:
+                sanitized_args.append(a)
+        raise OstrichException(f"Error executing helm {' '.join(sanitized_args)}")
 
 def safeWriteYaml(filename: str, data: dict) -> None:
     dirname = os.path.dirname(filename)

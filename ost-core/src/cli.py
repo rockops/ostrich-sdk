@@ -44,7 +44,7 @@ Then execute tasks in your plugin (depending on the template, see in the descrip
   - ost run package              : package your plugin (if you)
 
 Registry operations:
-  - ost registry login <url>     : login to an OCI registry
+  - ost registry login [<name>] [-u username] [-p password | --password-stdin] : login to an OCI registry
 """)
 
     if abort:

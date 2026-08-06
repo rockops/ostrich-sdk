@@ -8,5 +8,5 @@ PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 export PYTHONPATH=$PROJECT_ROOT/ost-core:$PYTHONPATH
 
 echo "Running Ostrich SDK unit tests (Main Suite)..."
-pytest "$PROJECT_ROOT/ost-core/test/test_operations_runner.py" "$@"
+pytest "$PROJECT_ROOT/ost-core/test" "$@"
 
