@@ -53,6 +53,7 @@ func usage() {
 	os.Stderr.WriteString("Commands:\n")
 	os.Stderr.WriteString("  sh               Open a shell in the container\n")
 	os.Stderr.WriteString("  image <image>    Set the default Docker image to use\n")
+	os.Stderr.WriteString("  image show       Print the Docker image that will be used\n")
 	os.Stderr.WriteString("  image --rm       Remove the custom image setting\n")
 	os.Stderr.WriteString("  <ost command>    Any valid ost command\n")
 }
@@ -110,6 +111,7 @@ func main() {
 	var envVars []string
 	var ostArgs []string
 	debug := false
+	showImage := false
 
 	// First pass to detect debug and help
 	tempArgs := os.Args[1:]
@@ -142,7 +144,12 @@ func main() {
 			// already handled
 		case "--image":
 			if i+1 < len(args) {
-				image = args[i+1]
+				val := args[i+1]
+				if val == "show" {
+					showImage = true
+				} else {
+					image = val
+				}
 				i++
 			} else {
 				slog.Error("Argument for --image is missing")
@@ -185,6 +192,11 @@ func main() {
 	}
 	slog.Debug(fmt.Sprintf("Final docker image: %s", image))
 
+	if showImage {
+		fmt.Println(image)
+		os.Exit(0)
+	}
+
 	var mappings []mapping
 
 	pwd, _ := os.Getwd()
@@ -223,6 +235,10 @@ func main() {
 			os.Exit(1)
 		}
 		newImage := ostArgs[1]
+		if newImage == "show" {
+			fmt.Println(image)
+			os.Exit(0)
+		}
 		if newImage == "--rm" {
 			err := os.Remove(imageFile)
 			if err != nil && !os.IsNotExist(err) {
