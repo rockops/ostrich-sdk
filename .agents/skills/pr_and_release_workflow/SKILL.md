@@ -1,6 +1,6 @@
 ---
 name: pr_and_release_workflow
-description: Automate the Ostrich SDK development workflow, including bumping version in VERSION file, running local tests, creating PRs, merging to main, and pushing vX.Y.Z release tags to trigger PyPI publishing and GitHub releases.
+description: Automate the Ostrich SDK development workflow, including bumping version in VERSION file, building Go binaries, Docker images, and Helm packages, running local tests, creating PRs, merging to main, and pushing vX.Y.Z release tags to trigger PyPI publishing and GitHub releases.
 ---
 
 # Ostrich SDK Development, Pull Request, and Release Workflow
@@ -28,7 +28,7 @@ Use this skill when executing the standard development, version bumping, testing
 
 ---
 
-### Step 3: Run Local Integration & Container Tests
+### Step 3: Local Build, Helm Package Generation & Integration Tests
 Before submitting a PR, verify changes locally to ensure existing features remain intact:
 1. Compile current Go CLI binaries:
    ```bash
@@ -40,7 +40,11 @@ Before submitting a PR, verify changes locally to ensure existing features remai
    ```bash
    ./docker/ostrich-sdk/build.sh -n test
    ```
-3. Run integration tests on both local Python (`host`) and containerized (`ostd`) runners:
+3. Generate the local Helm chart package (reading version automatically from root `VERSION` file):
+   ```bash
+   ./helm/build.sh -n
+   ```
+4. Run integration tests on both local Python (`host`) and containerized (`ostd`) runners:
    ```bash
    export PYTHONPATH=$(pwd)/ost-core:$PYTHONPATH
    export OST_IMAGE_TAG=test
@@ -87,5 +91,5 @@ Pushing the `v<X.Y.Z>` tag to GitHub automatically triggers two release pipeline
 2. **Release Build (`.github/workflows/release.yml`)**:
    - Compiles Go CLI binaries (`ostd` and `ostr`) for Linux, macOS, and Windows.
    - Builds and pushes Docker images (`ostrich-sdk:X.Y.Z` and `ostrich-sdk-ssh:X.Y.Z`) to GHCR.
-   - Packages and pushes the Helm chart.
+   - Packages and pushes the Helm chart package (`ostrich-sdk-X.Y.Z.tgz`).
    - Creates a GitHub Release tagged `vX.Y.Z` attaching the `ostd` and `ostr` CLI binaries.
