@@ -20,13 +20,13 @@ def getSDKPath(relative_path):
     matching the environment (host or ostd container).
     """
     if os.getenv("USE_OSTD", "false").lower() == "true":
-        return os.path.normpath("/sdk/" + relative_path).replace("\\", "/")
+        return os.path.normpath("/sdk/src/" + relative_path).replace("\\", "/")
     else:
         # Get the path on host
-        # This file is in src/src/test/sdk.py, so ../../ is src/
+        # This file is in src/test/sdk.py, so ../ is src/
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        sdk_root = os.path.abspath(script_dir + "/../../")
-        return os.path.abspath(os.path.join(sdk_root, relative_path)).replace("\\", "/")
+        src_root = os.path.abspath(script_dir + "/../")
+        return os.path.abspath(os.path.join(src_root, relative_path)).replace("\\", "/")
 
 
 RESET_ALL='\033[0;m'
