@@ -40,4 +40,4 @@ def test_input_java_path():
 def test_input_not_found():
     with pytest.raises(OstrichException) as excinfo:
         input_filter("test", "missing")
-    assert "Error in 'input' filter for 'missing'" in str(excinfo.value)
+    assert "Cannot locate key template.params.input.missing in config file" in str(excinfo.value)

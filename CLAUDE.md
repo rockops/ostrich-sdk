@@ -30,7 +30,7 @@ To run unit tests for the python core (`ost-core`) using `pytest`:
 Or run pytest manually with PYTHONPATH configured:
 ```bash
 export PYTHONPATH=$(pwd)/ost-core:$PYTHONPATH
-pytest ost-core/test/test_operations_runner.py
+pytest ost-core/test
 ```
 
 ### Python Core Integration Tests

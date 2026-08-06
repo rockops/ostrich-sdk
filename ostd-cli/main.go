@@ -51,11 +51,11 @@ func usage() {
 	os.Stderr.WriteString("  -d               Enable debug logging\n")
 	os.Stderr.WriteString("  -h, --help       Show this help\n\n")
 	os.Stderr.WriteString("Commands:\n")
-	os.Stderr.WriteString("  sh               Open a shell in the container\n")
-	os.Stderr.WriteString("  image <image>    Set the default Docker image to use\n")
-	os.Stderr.WriteString("  image show       Print the Docker image that will be used\n")
-	os.Stderr.WriteString("  image --rm       Remove the custom image setting\n")
-	os.Stderr.WriteString("  <ost command>    Any valid ost command\n")
+	os.Stderr.WriteString("  sh                                Open a shell in the container\n")
+	os.Stderr.WriteString("  image <image[:tag]>               Set default image (e.g. ostd image ghcr.io/rockops/ostrich-sdk:0.2.1)\n")
+	os.Stderr.WriteString("  image show                        Print the Docker image that will be used\n")
+	os.Stderr.WriteString("  image --rm                        Remove the custom image setting\n")
+	os.Stderr.WriteString("  <ost command>                     Any valid ost command\n")
 }
 
 func toUnixPath(path string) string {
