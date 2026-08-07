@@ -308,12 +308,16 @@ func main() {
 		os.MkdirAll(filepath.Join(ostrichDockerDir, f), 0755)
 	}
 
-	// TTY detection
+	// TTY & Stdin Pipe detection
 	var interactive []string
-	if term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
-		interactive = []string{"-it"}
-	} else {
-		interactive = []string{"-i"}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		if term.IsTerminal(int(os.Stdout.Fd())) {
+			interactive = []string{"-it"}
+		}
+	} else if fi, err := os.Stdin.Stat(); err == nil {
+		if (fi.Mode()&os.ModeNamedPipe) != 0 || fi.Mode().IsRegular() {
+			interactive = []string{"-i"}
+		}
 	}
 
 	// Get sdk core directory (ost-core)

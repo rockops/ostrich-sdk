@@ -176,13 +176,14 @@ def run(cmd: str, expectedReturnCode: int = None, outputContent: str = None, noO
 
     result=""
 
-    toRead=True
-    print(YELLOW,flush=True)
-    while toRead:
+    open_streams = 2
+    print(YELLOW, flush=True)
+    while open_streams > 0:
       for key, _ in sel.select():
         data = key.fileobj.read1().decode()
         if not data:
-            toRead=False
+            sel.unregister(key.fileobj)
+            open_streams -= 1
         else:
           if key.fileobj is p.stdout:
               printIndent(data)
@@ -191,7 +192,7 @@ def run(cmd: str, expectedReturnCode: int = None, outputContent: str = None, noO
               printIndent(RED+data+YELLOW)
               result += data
 
-    print(RESET_ALL,flush=True)
+    print(RESET_ALL, flush=True)
 
     p.wait()
     return_code = p.returncode
@@ -284,22 +285,19 @@ def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=Non
     sel.register(p.stdout, selectors.EVENT_READ)
     sel.register(p.stderr, selectors.EVENT_READ)
 
-    toRead=True
-    print(CYAN,flush=True)
-    while toRead:
+    open_streams = 2
+    print(CYAN, flush=True)
+    while open_streams > 0:
       for key, _ in sel.select():
         data = key.fileobj.read1().decode()
         if not data:
-            toRead=False
+            sel.unregister(key.fileobj)
+            open_streams -= 1
         else:
-          if key.fileobj is p.stdout:
-              printIndent(data)
-              result += data
-          else:
-              printIndent(data)
-              result += data
+          printIndent(data)
+          result += data
 
-    print(RESET_ALL,flush=True)
+    print(RESET_ALL, flush=True)
 
   p.wait()
   return_code = p.returncode
