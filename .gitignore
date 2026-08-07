@@ -16,3 +16,5 @@ ostrich-plugins/
 *.egg
 build/
 dist/
+.cache/
+.config/
