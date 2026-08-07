@@ -339,20 +339,21 @@ func main() {
 	dockerRunArgs = append(dockerRunArgs, "-w", workdir)
 
 	mountVolume(&dockerRunArgs, &mappings, filepath.Join(home, ".kube", "config"), "/kubeconfig")
-	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "config"), "/sdk/.config")
-	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "cache"), "/sdk/.cache")
-	mountVolume(&dockerRunArgs, &mappings, ostrichDockerDir, "/sdk/.ostrich")
+	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "config"), "/home/sdk/.config")
+	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "cache"), "/home/sdk/.cache")
+	mountVolume(&dockerRunArgs, &mappings, ostrichDockerDir, "/home/sdk/.ostrich")
 	addMapping(&mappings, ostCoreDir, "/sdk")
 
 	dockerRunArgs = append(dockerRunArgs,
 		"-e", "KUBECONFIG=/kubeconfig",
-		"-e", "HOME=/sdk",
-		"-e", "XDG_CONFIG_HOME=/sdk/.config",
-		"-e", "XDG_CACHE_HOME=/sdk/.cache",
+		"-e", "HOME=/home/sdk",
+		"-e", "XDG_CONFIG_HOME=/home/sdk/.config",
+		"-e", "XDG_CACHE_HOME=/home/sdk/.cache",
 		"-e", "OST_WORKSPACE="+unixPwd,
 		"-e", "OST_SDK_HOST_PATH="+unixTop,
 		"-e", "OST_HOME_HOST_PATH="+unixHome,
 	)
+
 
 
 	// Pass docker config if it exists
