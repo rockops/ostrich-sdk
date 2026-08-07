@@ -310,12 +310,10 @@ func main() {
 
 	// TTY detection
 	var interactive []string
-	if term.IsTerminal(int(os.Stdin.Fd())) {
-		if term.IsTerminal(int(os.Stdout.Fd())) {
-			interactive = []string{"-it"}
-		} else {
-			interactive = []string{"-i"}
-		}
+	if term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
+		interactive = []string{"-it"}
+	} else {
+		interactive = []string{"-i"}
 	}
 
 	// Get sdk core directory (ost-core)
