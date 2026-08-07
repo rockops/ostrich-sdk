@@ -303,7 +303,7 @@ func main() {
 
 	// Ensure directory exists
 	os.MkdirAll(ostrichDockerDir, 0755)
-	folders := []string{"config", "helm", "sdk-config"}
+	folders := []string{"config", "helm", "sdk-config", "cache"}
 	for _, f := range folders {
 		os.MkdirAll(filepath.Join(ostrichDockerDir, f), 0755)
 	}
@@ -339,16 +339,21 @@ func main() {
 	dockerRunArgs = append(dockerRunArgs, "-w", workdir)
 
 	mountVolume(&dockerRunArgs, &mappings, filepath.Join(home, ".kube", "config"), "/kubeconfig")
+	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "config"), "/sdk/.config")
+	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "cache"), "/sdk/.cache")
 	mountVolume(&dockerRunArgs, &mappings, ostrichDockerDir, "/sdk/.ostrich")
 	addMapping(&mappings, ostCoreDir, "/sdk")
 
 	dockerRunArgs = append(dockerRunArgs,
 		"-e", "KUBECONFIG=/kubeconfig",
 		"-e", "HOME=/sdk",
+		"-e", "XDG_CONFIG_HOME=/sdk/.config",
+		"-e", "XDG_CACHE_HOME=/sdk/.cache",
 		"-e", "OST_WORKSPACE="+unixPwd,
 		"-e", "OST_SDK_HOST_PATH="+unixTop,
 		"-e", "OST_HOME_HOST_PATH="+unixHome,
 	)
+
 
 	// Pass docker config if it exists
 	dockerConfig := filepath.Join(home, ".docker", "config.json")

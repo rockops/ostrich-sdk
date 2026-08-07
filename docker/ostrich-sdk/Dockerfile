@@ -70,8 +70,10 @@ COPY sdk /sdk
 WORKDIR /sdk
 
 # Python deps
-RUN mkdir -p /data /sdk/k8s && \
+RUN mkdir -p /data /sdk/k8s /sdk/.config /sdk/.cache /sdk/.ostrich && \
+    chmod -R 777 /sdk/.config /sdk/.cache /sdk/.ostrich && \
     /python-sdk/bin/pip install .
+
 
 EXPOSE 22
 
