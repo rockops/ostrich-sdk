@@ -320,12 +320,8 @@ func main() {
 		}
 	}
 
-	// Get sdk core directory (ost-core)
-	exePath, _ := os.Executable()
-	topDir := filepath.Dir(exePath)
-	ostCoreDir := filepath.Join(topDir, "..", "..", "ost-core")
-	unixTop := toUnixPath(ostCoreDir)
 	unixHome := toUnixPath(home)
+
 
 	dockerRunArgs := []string{"run", "--rm"}
 	dockerRunArgs = append(dockerRunArgs, interactive...)
@@ -342,7 +338,7 @@ func main() {
 	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "config"), "/home/sdk/.config")
 	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "cache"), "/home/sdk/.cache")
 	mountVolume(&dockerRunArgs, &mappings, ostrichDockerDir, "/home/sdk/.ostrich")
-	mountVolume(&dockerRunArgs, &mappings, ostCoreDir, "/sdk")
+	mountVolume(&dockerRunArgs, &mappings, os.TempDir(), os.TempDir())
 
 
 	dockerRunArgs = append(dockerRunArgs,
@@ -350,9 +346,7 @@ func main() {
 		"-e", "HOME=/home/sdk",
 		"-e", "XDG_CONFIG_HOME=/home/sdk/.config",
 		"-e", "XDG_CACHE_HOME=/home/sdk/.cache",
-		"-e", "PYTHONPATH=/sdk",
 		"-e", "OST_WORKSPACE="+unixPwd,
-		"-e", "OST_SDK_HOST_PATH="+unixTop,
 		"-e", "OST_HOME_HOST_PATH="+unixHome,
 	)
 
@@ -362,8 +356,9 @@ func main() {
 	// Pass docker config if it exists
 	dockerConfig := filepath.Join(home, ".docker", "config.json")
 	if _, err := os.Stat(dockerConfig); err == nil {
-		mountVolume(&dockerRunArgs, &mappings, dockerConfig, "/sdk/.docker/config.json", "ro")
+		mountVolume(&dockerRunArgs, &mappings, dockerConfig, "/home/sdk/.docker/config.json", "ro")
 	}
+
 
 	// Mount SSL certificates for certificate verification
 	if _, err := os.Stat("/etc/ssl/certs"); err == nil {

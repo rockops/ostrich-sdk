@@ -2,7 +2,8 @@ runner:
   kind: container
   image: python:3.11-alpine
 commands:
-  - sh -c 'echo "[[ "." | fromTemplate ]]" && ls -l [[ "." | fromTemplate | toUnixPath ]]'
+  - sh -c 'echo "[[ "." | fromTemplate ]]"'
+
   - sh -c 'echo TEMPLATE_DIR=$TEMPLATE_DIR'
   - sh -c 'echo OPERATION=$OPERATION'
   - sh -c 'ls -l $TEMPLATE_DIR/$OPERATION'

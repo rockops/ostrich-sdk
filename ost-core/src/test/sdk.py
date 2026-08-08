@@ -25,10 +25,8 @@ def getSDKPath(relative_path):
     except ImportError:
         import util
 
-    use_ostd = os.getenv("USE_OSTD", "false").lower() == "true"
-    if use_ostd:
-        return util.toUnixPath(os.path.join("/sdk/src", relative_path))
     return util.toUnixPath(os.path.join(util.root(), relative_path))
+
 
 
 

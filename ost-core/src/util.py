@@ -203,9 +203,8 @@ def runcheck(cmd):
         raise OstrichException(f"Error executing command {' '.join(cmd)}")
 
 def root():
-    if os.path.exists("/sdk/src/templates"):
-        return "/sdk/src"
     src_dir = os.path.dirname(os.path.abspath(__file__))
+
     if os.path.basename(src_dir) != "src" and os.path.exists(os.path.join(src_dir, "src", "templates")):
         return os.path.join(src_dir, "src")
     if os.path.exists(os.path.join(src_dir, "templates")):

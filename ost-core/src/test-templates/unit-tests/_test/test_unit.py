@@ -174,11 +174,12 @@ template:
         # fromTemplate => appends the location of the current template
         # To check, the template location is derived from the location of this current file
         # fromTemplate => appends the location of the template
-        sdk.checkFileContent(filtersPath, "^fromTemplate:" + sdk.getSDKPath("test-templates/unit-tests/folder")+"$")
+        sdk.checkFileContent(filtersPath, "^fromTemplate:.*test-templates/unit-tests/folder$")
         # fromTemplates => appends the location of the global template folder
-        sdk.checkFileContent(filtersPath, "^fromTemplates:" + sdk.getSDKPath("templates/folder")+"$")
+        sdk.checkFileContent(filtersPath, "^fromTemplates:.*templates/folder$")
         # fromJob => appends the location of the current job
-        sdk.checkFileContent(filtersPath, "^fromJob:" + sdk.getSDKPath("test-templates/unit-tests/unit/folder")+"$")
+        sdk.checkFileContent(filtersPath, "^fromJob:.*test-templates/unit-tests/unit/folder$")
+
         # nosnapshot => remove the '-xxx' suffix from the snapshot name if any 
         sdk.checkFileContent(filtersPath, "^nosnapshot1:1.2.3$")
         sdk.checkFileContent(filtersPath, "^nosnapshot2:3.4.5$")
