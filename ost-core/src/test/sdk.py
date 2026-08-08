@@ -7,14 +7,16 @@ from pathlib import Path
 import re
 import requests
 import selectors
+import shutil
 import subprocess
 import sys
+
 import time
 import yaml
 
 
-
 def getSDKPath(relative_path):
+
     """
     Get the absolute path of a file/directory within the SDK, 
     matching the environment (host or ostd container).
@@ -242,6 +244,9 @@ def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=Non
     else:
         raise Exception(f"Unsupported OS: {system}")
         
+    if not os.path.exists(ostd_path):
+        ostd_path = shutil.which("ostd") or ostd_path
+
     tabParams=[ostd_path, "--nologo"]
     custom_tag = os.getenv("OST_IMAGE_TAG")
     if custom_tag:
@@ -251,8 +256,16 @@ def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=Non
         if k.startswith("TEST_") or k.startswith("QUOTE_"):
             tabParams.extend(["-e", f"{k}={v}"])
   else:
-    ost_path = os.path.normpath(os.path.join(script_dir, "..", "..", "ost"))
-    tabParams=[sys.executable, ost_path, "--nologo"]
+    ost_exec = shutil.which("ost")
+    if ost_exec:
+        tabParams = [ost_exec, "--nologo"]
+    else:
+        ost_path = os.path.normpath(os.path.join(script_dir, "..", "..", "ost"))
+        if os.path.exists(ost_path):
+            tabParams = [sys.executable, ost_path, "--nologo"]
+        else:
+            tabParams = [sys.executable, "-m", "src.cli", "--nologo"]
+
 
   if logging.root.level <= logging.DEBUG and not noDebug:
     tabParams.append("--debug")      

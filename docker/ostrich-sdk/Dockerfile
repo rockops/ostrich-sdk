@@ -74,7 +74,9 @@ RUN /python-sdk/bin/pip install /tmp/sdk-build && \
     mkdir -p /sdk /data /home/sdk/.config /home/sdk/.cache /home/sdk/.ostrich && \
     echo '#!/bin/sh\nexec /python-sdk/bin/ost "$@"' > /sdk/ost && \
     chmod +x /sdk/ost && \
+    chown -R 1000:1000 /home/sdk && \
     chmod -R 777 /home/sdk /data /sdk
+
 
 EXPOSE 22
 
