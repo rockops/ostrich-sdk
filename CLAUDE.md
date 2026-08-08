@@ -73,3 +73,9 @@ To deploy the local Ostrich SSHD Helm chart to your Kubernetes cluster:
 - **Standard Library Formatting:** Follow standard `go fmt`.
 - **Log level:** Use `log/slog` for structured logging. Add debug flags (`-d` or `--debug`) to output debug logs.
 - **Path mapping:** Windows paths must be translated to POSIX-compliant paths using `toUnixPath()` (e.g. `C:\path` to `/c/path`) when mounting into containers.
+
+---
+
+## Agent Interaction Rules
+- **Background Tasks:** Always print the link to the log file (and `tail -f` command) whenever executing or referencing a background command.
+

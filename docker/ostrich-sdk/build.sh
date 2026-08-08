@@ -52,6 +52,8 @@ docker build -t ostrich-sdk:$TAG .
 
 rm -rf $TOP/sdk
 
+
+
 if [ "$PUSH" == "true" ]; then
     echo ">> Tag and push Docker image $REGISTRY/ostrich-sdk:$TAG"
     docker tag ostrich-sdk:$TAG $REGISTRY/ostrich-sdk:$TAG

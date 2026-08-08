@@ -203,16 +203,27 @@ def runcheck(cmd):
         raise OstrichException(f"Error executing command {' '.join(cmd)}")
 
 def root():
+    if os.path.exists("/sdk/src/templates"):
+        return "/sdk/src"
     src_dir = os.path.dirname(os.path.abspath(__file__))
+    if os.path.basename(src_dir) != "src" and os.path.exists(os.path.join(src_dir, "src", "templates")):
+        return os.path.join(src_dir, "src")
     if os.path.exists(os.path.join(src_dir, "templates")):
         return src_dir
     pkg_dir = os.path.dirname(src_dir)
     if os.path.exists(os.path.join(pkg_dir, "templates")):
         return pkg_dir
+    if os.path.exists(os.path.join(pkg_dir, "src", "templates")):
+        return os.path.join(pkg_dir, "src")
     argv_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+    if os.path.exists(os.path.join(argv_dir, "src", "templates")):
+        return os.path.join(argv_dir, "src")
     if os.path.exists(os.path.join(argv_dir, "templates")):
         return argv_dir
     return src_dir
+
+
+
 
 
 def extraTemplateRoot():

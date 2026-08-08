@@ -16,19 +16,22 @@ import yaml
 
 
 def getSDKPath(relative_path):
-
     """
     Get the absolute path of a file/directory within the SDK, 
     matching the environment (host or ostd container).
     """
-    if os.getenv("USE_OSTD", "false").lower() == "true":
-        return os.path.normpath("/sdk/src/" + relative_path).replace("\\", "/")
-    else:
-        # Get the path on host
-        # This file is in src/test/sdk.py, so ../ is src/
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        src_root = os.path.abspath(script_dir + "/../")
-        return os.path.abspath(os.path.join(src_root, relative_path)).replace("\\", "/")
+    try:
+        from src import util
+    except ImportError:
+        import util
+
+    use_ostd = os.getenv("USE_OSTD", "false").lower() == "true"
+    if use_ostd:
+        return util.toUnixPath(os.path.join("/sdk/src", relative_path))
+    return util.toUnixPath(os.path.join(util.root(), relative_path))
+
+
+
 
 
 RESET_ALL='\033[0;m'
