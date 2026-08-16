@@ -9,7 +9,7 @@ helm/Chart.lock
 ostr-cli/ostr
 *.exe
 ostd-cli/ostd
-docker/ostrich-sdk/sdk/bin
+docker/ostrich-sdk/sdk/
 bin/
 ostrich-plugins/
 *.egg-info/

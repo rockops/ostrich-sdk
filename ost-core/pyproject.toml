@@ -47,7 +47,7 @@ dependencies = [
 ost = "src.cli:main"
 
 [tool.setuptools.dynamic]
-version = {file = ["VERSION"]}
+version = {file = ["src/VERSION"]}
 
 [tool.setuptools.packages.find]
 where = ["."]

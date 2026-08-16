@@ -49,7 +49,7 @@ export PATH=/usr/bin:$PATH
 
 cd $TOP
 
-docker build -t ostrich-sdk:$TAG .
+docker build --no-cache -t ostrich-sdk:$TAG .
 
 rm -rf $TOP/sdk
 
