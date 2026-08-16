@@ -36,9 +36,10 @@ echo ">> Build Docker image ostrich-sdk:$TAG"
 rm -rf $TOP/sdk
 mkdir -p $TOP/sdk
 for D in $(ls $TOP/../../ost-core | grep -v "__pycache__" ); do
-    cp -r $TOP/../../ost-core/$D $TOP/sdk
+    cp -r -L $TOP/../../ost-core/$D $TOP/sdk
 done
 cp $TOP/../../VERSION $TOP/sdk/VERSION
+cp $TOP/../../VERSION $TOP/sdk/src/VERSION
 
 # Clean compiled python cache files to keep docker layer cache stable
 find $TOP/sdk -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
