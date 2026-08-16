@@ -205,10 +205,13 @@ func main() {
 
 	if showVersion {
 		fmt.Printf("ostd %s\n", VERSION)
-		os.Exit(0)
+		ostArgs = []string{"--version"}
 	}
 
 	// Image and Tag logic
+	if strings.HasSuffix(tag, "-dev") {
+		tag = "latest"
+	}
 	if strings.Contains(image, ":") {
 		if tag != "latest" {
 			image = strings.SplitN(image, ":", 2)[0] + ":" + tag
