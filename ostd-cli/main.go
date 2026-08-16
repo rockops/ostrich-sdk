@@ -40,6 +40,7 @@ func (h *CustomHandler) WithGroup(name string) slog.Handler {
 var (
 	DefaultImage = "ghcr.io/rockops/ostrich-sdk"
 	DefaultTag   = "latest"
+	VERSION      = "0.0.0-dev"
 )
 
 func usage() {
@@ -50,6 +51,7 @@ func usage() {
 	fmt.Printf("  --tag <tag>      The Docker tag to use (default: %s)\n", DefaultTag)
 	fmt.Println("  -e <variable=value> Set an environment variable")
 	fmt.Println("  -d               Enable debug logging")
+	fmt.Println("  -v, --version    Show version")
 	fmt.Println("  -h, --help       Show this help")
 	fmt.Println()
 	fmt.Println("Commands:")
@@ -119,8 +121,9 @@ func main() {
 	debug := false
 	showImage := false
 	showHelp := false
+	showVersion := false
 
-	// First pass to detect debug and help
+	// First pass to detect debug, help and version
 	tempArgs := os.Args[1:]
 	if len(tempArgs) == 0 {
 		showHelp = true
@@ -131,6 +134,9 @@ func main() {
 		}
 		if arg == "-h" || arg == "--help" || arg == "help" {
 			showHelp = true
+		}
+		if arg == "-v" || arg == "--version" || arg == "version" {
+			showVersion = true
 		}
 	}
 
@@ -151,6 +157,8 @@ func main() {
 		switch arg {
 		case "-d", "--debug":
 			// already handled
+		case "-v", "--version":
+			showVersion = true
 		case "--image":
 			if i+1 < len(args) {
 				val := args[i+1]
@@ -188,9 +196,16 @@ func main() {
 		default:
 			if arg == "help" {
 				showHelp = true
+			} else if arg == "version" {
+				showVersion = true
 			}
 			ostArgs = append(ostArgs, arg)
 		}
+	}
+
+	if showVersion {
+		fmt.Printf("ostd %s\n", VERSION)
+		os.Exit(0)
 	}
 
 	// Image and Tag logic
