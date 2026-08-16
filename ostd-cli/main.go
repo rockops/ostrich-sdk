@@ -97,6 +97,10 @@ func mountVolume(dockerRunArgs *[]string, mappings *[]mapping, host, container s
 	addMapping(mappings, host, container)
 }
 
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 func main() {
 	home, _ := os.UserHomeDir()
 	var err error
@@ -350,6 +354,20 @@ func main() {
 		"-e", "OST_HOME_HOST_PATH="+unixHome,
 	)
 
+	// Forward host proxy environment variables if set
+	proxyEnvs := []string{
+		"HTTP_PROXY", "http_proxy",
+		"HTTPS_PROXY", "https_proxy",
+		"NO_PROXY", "no_proxy",
+		"ALL_PROXY", "all_proxy",
+	}
+	for _, envKey := range proxyEnvs {
+		if val := os.Getenv(envKey); val != "" {
+			dockerRunArgs = append(dockerRunArgs, "-e", fmt.Sprintf("%s=%s", envKey, val))
+			slog.Debug(fmt.Sprintf("Passing host proxy variable: %s=%s", envKey, val))
+		}
+	}
+
 
 
 
@@ -360,8 +378,15 @@ func main() {
 	}
 
 
-	// Mount SSL certificates for certificate verification
-	if _, err := os.Stat("/etc/ssl/certs"); err == nil {
+	// Bind mount /usr/local/share/ca-certificates if it exists on host
+	hasCaCerts := false
+	caCertDir := "/usr/local/share/ca-certificates"
+	if _, err := os.Stat(caCertDir); err == nil {
+		hasCaCerts = true
+		mountVolume(&dockerRunArgs, &mappings, caCertDir, caCertDir, "ro")
+		slog.Debug(fmt.Sprintf("Mounted %s into container", caCertDir))
+	} else if _, err := os.Stat("/etc/ssl/certs"); err == nil {
+		// Mount SSL certificates for certificate verification if custom ca-certificates folder does not exist
 		mountVolume(&dockerRunArgs, &mappings, "/etc/ssl/certs", "/etc/ssl/certs", "ro")
 	}
 
@@ -378,32 +403,69 @@ func main() {
 		dockerRunArgs = append(dockerRunArgs, "-v", fmt.Sprintf("%s:/ostrich-volumes.yaml", volumesFile))
 	}
 
-	// Linux specific UID/GID
-	if runtime.GOOS == "linux" {
-		uid := os.Getuid()
-		gid := os.Getgid()
-		dockerRunArgs = append(dockerRunArgs, "-u", fmt.Sprintf("%d:%d", uid, gid))
+	// Linux specific UID/GID and group settings
+	var uid, gid int
+	var groupAdd []string
+	isLinux := (runtime.GOOS == "linux")
+	if isLinux {
+		uid = os.Getuid()
+		gid = os.Getgid()
 
 		// Try to get docker group id
 		cmd := exec.Command("getent", "group", "docker")
 		out, err := cmd.Output()
 		if err == nil {
 			parts := strings.Split(strings.TrimSpace(string(out)), ":")
-			if len(parts) >= 3 {
-				dockerRunArgs = append(dockerRunArgs, "--group-add", parts[2])
+			if len(parts) >= 3 && parts[2] != "" {
+				groupAdd = append(groupAdd, parts[2])
 			}
 		}
 	}
 
-	dockerRunArgs = append(dockerRunArgs, "--network", "host")
-	dockerRunArgs = append(dockerRunArgs, "--entrypoint", entrypoint)
-	dockerRunArgs = append(dockerRunArgs, image)
-
+	targetCmd := []string{entrypoint}
 	if debug && entrypoint == "/sdk/ost" {
-		dockerRunArgs = append(dockerRunArgs, "-d")
+		targetCmd = append(targetCmd, "-d")
 	}
+	targetCmd = append(targetCmd, ostArgs...)
 
-	dockerRunArgs = append(dockerRunArgs, ostArgs...)
+	if hasCaCerts {
+		dockerRunArgs = append(dockerRunArgs, "--network", "host")
+		dockerRunArgs = append(dockerRunArgs, "--entrypoint", "bash")
+		dockerRunArgs = append(dockerRunArgs, image)
+
+		var quotedCmds []string
+		for _, arg := range targetCmd {
+			quotedCmds = append(quotedCmds, shellQuote(arg))
+		}
+		cmdString := strings.Join(quotedCmds, " ")
+
+		var script string
+		if isLinux && uid != 0 {
+			privCmd := fmt.Sprintf("setpriv --reuid=%d --regid=%d", uid, gid)
+			if len(groupAdd) > 0 {
+				groups := append([]string{fmt.Sprintf("%d", gid)}, groupAdd...)
+				privCmd += fmt.Sprintf(" --groups=%s", strings.Join(groups, ","))
+			}
+			script = fmt.Sprintf("update-ca-certificates >/dev/null 2>&1 && exec %s %s", privCmd, cmdString)
+		} else {
+			script = fmt.Sprintf("update-ca-certificates >/dev/null 2>&1 && exec %s", cmdString)
+		}
+
+		dockerRunArgs = append(dockerRunArgs, "-c", script)
+	} else {
+		if isLinux {
+			dockerRunArgs = append(dockerRunArgs, "-u", fmt.Sprintf("%d:%d", uid, gid))
+			for _, g := range groupAdd {
+				dockerRunArgs = append(dockerRunArgs, "--group-add", g)
+			}
+		}
+
+		dockerRunArgs = append(dockerRunArgs, "--network", "host")
+		dockerRunArgs = append(dockerRunArgs, "--entrypoint", entrypoint)
+		dockerRunArgs = append(dockerRunArgs, image)
+
+		dockerRunArgs = append(dockerRunArgs, targetCmd[1:]...)
+	}
 
 	slog.Debug(fmt.Sprintf("Docker command prepared: docker %s", strings.Join(dockerRunArgs, " ")))
 
