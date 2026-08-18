@@ -123,7 +123,7 @@ func main() {
 	showHelp := false
 	showVersion := false
 
-	// First pass to detect debug, help and version
+	// First pass to detect debug mode
 	tempArgs := os.Args[1:]
 	if len(tempArgs) == 0 {
 		showHelp = true
@@ -131,12 +131,6 @@ func main() {
 	for _, arg := range tempArgs {
 		if arg == "-d" || arg == "--debug" {
 			debug = true
-		}
-		if arg == "-h" || arg == "--help" || arg == "help" {
-			showHelp = true
-		}
-		if arg == "-v" || arg == "--version" || arg == "version" {
-			showVersion = true
 		}
 	}
 
@@ -194,12 +188,13 @@ func main() {
 		case "-h", "--help":
 			showHelp = true
 		default:
-			if arg == "help" {
+			if len(ostArgs) == 0 && arg == "help" {
 				showHelp = true
-			} else if arg == "version" {
+			} else if len(ostArgs) == 0 && arg == "version" {
 				showVersion = true
+			} else {
+				ostArgs = append(ostArgs, arg)
 			}
-			ostArgs = append(ostArgs, arg)
 		}
 	}
 

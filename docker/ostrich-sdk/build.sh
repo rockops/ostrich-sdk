@@ -6,6 +6,7 @@ TOP=$(cd $(dirname $0) && pwd)
 
 PUSH=true
 BUILD_SSH=true
+NO_CACHE=""
 
 while [[ "$1" == -* ]]; do
     case "$1" in
@@ -17,6 +18,10 @@ while [[ "$1" == -* ]]; do
             BUILD_SSH=false
             shift
             ;;
+        --no-cache)
+            NO_CACHE="--no-cache"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -25,6 +30,9 @@ while [[ "$1" == -* ]]; do
 done
 
 TAG=$1
+if [ -z "$TAG" ] && [ -f "$TOP/../../VERSION" ]; then
+    TAG=$(cat "$TOP/../../VERSION" | tr -d ' \t\r\n')
+fi
 test -z "$TAG" && TAG=latest
 
 REGISTRY=${PRIVATE_DOCKER_REGISTRY:-${PRIVATE_DOCKER_REGISTRY:-ghcr.io/rockops/docker}}
@@ -49,7 +57,7 @@ export PATH=/usr/bin:$PATH
 
 cd $TOP
 
-docker build --no-cache -t ostrich-sdk:$TAG .
+docker build $NO_CACHE -t ostrich-sdk:$TAG .
 
 rm -rf $TOP/sdk
 

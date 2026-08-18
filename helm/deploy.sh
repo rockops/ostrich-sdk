@@ -5,14 +5,18 @@ set -e
 
 VERSION=$1
 
+TOP=$(cd "$(dirname "$0")" && pwd)
+cd "$TOP"
+
+if [ -z "$VERSION" ] && [ -f "$TOP/../VERSION" ]; then
+    VERSION=$(cat "$TOP/../VERSION" | tr -d ' \t\r\n')
+fi
+
 if [ -z "$VERSION" ]; then
     echo "Usage: $0 <version>"
     echo "Example: $0 0.1.0"
     exit 1
 fi
-
-TOP=$(cd "$(dirname "$0")" && pwd)
-cd "$TOP"
 
 echo ">> Generating Chart.yaml for version $VERSION..."
 sed "s/0.0.0-changeme/$VERSION/g" Chart.yaml.tmpl > Chart.yaml

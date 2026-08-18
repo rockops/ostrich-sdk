@@ -71,20 +71,7 @@ func main() {
 		})
 	case "docker":
 		runOnRemote(func(c *SSHClient) error {
-			remoteDir := ""
-			if _, err := os.Stat("ostrich.yaml"); err == nil {
-				var err error
-				remoteDir, err = c.DoSync()
-				if err != nil {
-					return err
-				}
-			}
-			remoteCmd := ". /etc/profile.d/sdk.sh && "
-			if remoteDir != "" {
-				remoteCmd += "cd " + remoteDir + " && "
-			}
-			remoteCmd += "docker " + strings.Join(args, " ")
-			return c.RunInteractive(remoteCmd)
+			return c.RunInteractive(". /etc/profile.d/sdk.sh && docker " + strings.Join(args, " "))
 		})
 	case "kubectl":
 		runOnRemote(func(c *SSHClient) error {
@@ -107,19 +94,7 @@ func main() {
 	default:
 		// Try to run as a remote command if not a built-in
 		runOnRemote(func(c *SSHClient) error {
-			remoteDir := ""
-			if _, err := os.Stat("ostrich.yaml"); err == nil {
-				var err error
-				remoteDir, err = c.DoSync()
-				if err != nil {
-					return err
-				}
-			}
-			remoteCmd := ". /etc/profile.d/sdk.sh && "
-			if remoteDir != "" {
-				remoteCmd += "cd " + remoteDir + " && "
-			}
-			remoteCmd += "ost " + strings.Join(append([]string{command}, args...), " ")
+			remoteCmd := ". /etc/profile.d/sdk.sh && ost " + strings.Join(append([]string{command}, args...), " ")
 			return c.RunInteractive(remoteCmd)
 		})
 	}
