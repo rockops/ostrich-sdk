@@ -35,7 +35,7 @@ if [ -z "$TAG" ] && [ -f "$TOP/../../VERSION" ]; then
 fi
 test -z "$TAG" && TAG=latest
 
-REGISTRY=${PRIVATE_DOCKER_REGISTRY:-${PRIVATE_DOCKER_REGISTRY:-ghcr.io/rockops/docker}}
+REGISTRY=${PRIVATE_DOCKER_REGISTRY:-${PRIVATE_DOCKER_REGISTRY:-ghcr.io/rockops}}
 
 
 echo "========================================="
