@@ -231,20 +231,25 @@ func main() {
 
 	addMapping(&mappings, pwd, unixPwd)
 
-	// Handle Windows-style output paths for -o option
-	if runtime.GOOS == "windows" {
-		for i := 0; i < len(ostArgs); i++ {
-			if ostArgs[i] == "-o" && i+1 < len(ostArgs) {
-				outputPath := ostArgs[i+1]
-				// Check if it's a Windows-style path (contains drive letter or backslashes)
-				if filepath.VolumeName(outputPath) != "" || strings.Contains(outputPath, "\\") {
-					absPath, err := filepath.Abs(outputPath)
+	// Handle Windows-style and external paths for -o and -f options
+	for i := 0; i < len(ostArgs); i++ {
+		if (ostArgs[i] == "-o" || ostArgs[i] == "-f" || ostArgs[i] == "--file") && i+1 < len(ostArgs) {
+			filePath := ostArgs[i+1]
+			if runtime.GOOS == "windows" {
+				if filepath.VolumeName(filePath) != "" || strings.Contains(filePath, "\\") {
+					absPath, err := filepath.Abs(filePath)
 					if err == nil {
 						wslPath := toUnixPath(absPath)
 						addMapping(&mappings, absPath, wslPath)
 						ostArgs[i+1] = wslPath
-						slog.Debug(fmt.Sprintf("Windows output path detected: %s -> %s (mounted)", outputPath, wslPath))
+						slog.Debug(fmt.Sprintf("Path mapped for container: %s -> %s (mounted)", filePath, wslPath))
 					}
+				}
+			} else {
+				// On Unix, if file is outside pwd, ensure its parent directory or file is mounted
+				if filepath.IsAbs(filePath) && !strings.HasPrefix(filePath, pwd) {
+					addMapping(&mappings, filePath, filePath)
+					slog.Debug(fmt.Sprintf("External path mapped for container: %s", filePath))
 				}
 			}
 		}
