@@ -7,11 +7,12 @@ from pathlib import Path
 import re
 import requests
 import selectors
+import shutil
 import subprocess
 import sys
+
 import time
 import yaml
-
 
 
 def getSDKPath(relative_path):
@@ -19,14 +20,16 @@ def getSDKPath(relative_path):
     Get the absolute path of a file/directory within the SDK, 
     matching the environment (host or ostd container).
     """
-    if os.getenv("USE_OSTD", "false").lower() == "true":
-        return os.path.normpath("/sdk/src/" + relative_path).replace("\\", "/")
-    else:
-        # Get the path on host
-        # This file is in src/test/sdk.py, so ../ is src/
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        src_root = os.path.abspath(script_dir + "/../")
-        return os.path.abspath(os.path.join(src_root, relative_path)).replace("\\", "/")
+    try:
+        from src import util
+    except ImportError:
+        import util
+
+    return util.toUnixPath(os.path.join(util.root(), relative_path))
+
+
+
+
 
 
 RESET_ALL='\033[0;m'
@@ -176,13 +179,14 @@ def run(cmd: str, expectedReturnCode: int = None, outputContent: str = None, noO
 
     result=""
 
-    toRead=True
-    print(YELLOW,flush=True)
-    while toRead:
+    open_streams = 2
+    print(YELLOW, flush=True)
+    while open_streams > 0:
       for key, _ in sel.select():
         data = key.fileobj.read1().decode()
         if not data:
-            toRead=False
+            sel.unregister(key.fileobj)
+            open_streams -= 1
         else:
           if key.fileobj is p.stdout:
               printIndent(data)
@@ -191,7 +195,7 @@ def run(cmd: str, expectedReturnCode: int = None, outputContent: str = None, noO
               printIndent(RED+data+YELLOW)
               result += data
 
-    print(RESET_ALL,flush=True)
+    print(RESET_ALL, flush=True)
 
     p.wait()
     return_code = p.returncode
@@ -241,6 +245,9 @@ def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=Non
     else:
         raise Exception(f"Unsupported OS: {system}")
         
+    if not os.path.exists(ostd_path):
+        ostd_path = shutil.which("ostd") or ostd_path
+
     tabParams=[ostd_path, "--nologo"]
     custom_tag = os.getenv("OST_IMAGE_TAG")
     if custom_tag:
@@ -250,8 +257,16 @@ def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=Non
         if k.startswith("TEST_") or k.startswith("QUOTE_"):
             tabParams.extend(["-e", f"{k}={v}"])
   else:
-    ost_path = os.path.normpath(os.path.join(script_dir, "..", "..", "ost"))
-    tabParams=[sys.executable, ost_path, "--nologo"]
+    ost_exec = shutil.which("ost")
+    if ost_exec:
+        tabParams = [ost_exec, "--nologo"]
+    else:
+        ost_path = os.path.normpath(os.path.join(script_dir, "..", "..", "ost"))
+        if os.path.exists(ost_path):
+            tabParams = [sys.executable, ost_path, "--nologo"]
+        else:
+            tabParams = [sys.executable, "-m", "src.cli", "--nologo"]
+
 
   if logging.root.level <= logging.DEBUG and not noDebug:
     tabParams.append("--debug")      
@@ -284,22 +299,19 @@ def ost(params=[], expectedReturnCode=0, outputContent=None, noOutputContent=Non
     sel.register(p.stdout, selectors.EVENT_READ)
     sel.register(p.stderr, selectors.EVENT_READ)
 
-    toRead=True
-    print(CYAN,flush=True)
-    while toRead:
+    open_streams = 2
+    print(CYAN, flush=True)
+    while open_streams > 0:
       for key, _ in sel.select():
         data = key.fileobj.read1().decode()
         if not data:
-            toRead=False
+            sel.unregister(key.fileobj)
+            open_streams -= 1
         else:
-          if key.fileobj is p.stdout:
-              printIndent(data)
-              result += data
-          else:
-              printIndent(data)
-              result += data
+          printIndent(data)
+          result += data
 
-    print(RESET_ALL,flush=True)
+    print(RESET_ALL, flush=True)
 
   p.wait()
   return_code = p.returncode

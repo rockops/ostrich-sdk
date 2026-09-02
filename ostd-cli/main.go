@@ -40,22 +40,26 @@ func (h *CustomHandler) WithGroup(name string) slog.Handler {
 var (
 	DefaultImage = "ghcr.io/rockops/ostrich-sdk"
 	DefaultTag   = "latest"
+	VERSION      = "0.0.0-dev"
 )
 
 func usage() {
-	os.Stderr.WriteString("Usage: ostd [options] [command]\n\n")
-	os.Stderr.WriteString("Options:\n")
-	fmt.Fprintf(os.Stderr, "  --image <image>  The Docker image to use (default: %s)\n", DefaultImage)
-	fmt.Fprintf(os.Stderr, "  --tag <tag>      The Docker tag to use (default: %s)\n", DefaultTag)
-	os.Stderr.WriteString("  -e <variable=value> Set an environment variable\n")
-	os.Stderr.WriteString("  -d               Enable debug logging\n")
-	os.Stderr.WriteString("  -h, --help       Show this help\n\n")
-	os.Stderr.WriteString("Commands:\n")
-	os.Stderr.WriteString("  sh                                Open a shell in the container\n")
-	os.Stderr.WriteString("  image <image[:tag]>               Set default image (e.g. ostd image ghcr.io/rockops/ostrich-sdk:0.2.1)\n")
-	os.Stderr.WriteString("  image show                        Print the Docker image that will be used\n")
-	os.Stderr.WriteString("  image --rm                        Remove the custom image setting\n")
-	os.Stderr.WriteString("  <ost command>                     Any valid ost command\n")
+	fmt.Println("Usage: ostd [options] [command]")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Printf("  --image <image>  The Docker image to use (default: %s)\n", DefaultImage)
+	fmt.Printf("  --tag <tag>      The Docker tag to use (default: %s)\n", DefaultTag)
+	fmt.Println("  -e <variable=value> Set an environment variable")
+	fmt.Println("  -d               Enable debug logging")
+	fmt.Println("  -v, --version    Show version")
+	fmt.Println("  -h, --help       Show this help")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  sh                                Open a shell in the container")
+	fmt.Println("  image <image[:tag]>               Set default image (e.g. ostd image ghcr.io/rockops/ostrich-sdk:0.2.1)")
+	fmt.Println("  image show                        Print the Docker image that will be used")
+	fmt.Println("  image --rm                        Remove the custom image setting")
+	fmt.Println("  <ost command>                     Any valid ost command")
 }
 
 func toUnixPath(path string) string {
@@ -95,6 +99,10 @@ func mountVolume(dockerRunArgs *[]string, mappings *[]mapping, host, container s
 	addMapping(mappings, host, container)
 }
 
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 func main() {
 	home, _ := os.UserHomeDir()
 	var err error
@@ -112,16 +120,17 @@ func main() {
 	var ostArgs []string
 	debug := false
 	showImage := false
+	showHelp := false
+	showVersion := false
 
-	// First pass to detect debug and help
+	// First pass to detect debug mode
 	tempArgs := os.Args[1:]
+	if len(tempArgs) == 0 {
+		showHelp = true
+	}
 	for _, arg := range tempArgs {
 		if arg == "-d" || arg == "--debug" {
 			debug = true
-		}
-		if arg == "-h" || arg == "--help" {
-			usage()
-			os.Exit(0)
 		}
 	}
 
@@ -142,6 +151,8 @@ func main() {
 		switch arg {
 		case "-d", "--debug":
 			// already handled
+		case "-v", "--version":
+			showVersion = true
 		case "--image":
 			if i+1 < len(args) {
 				val := args[i+1]
@@ -175,14 +186,27 @@ func main() {
 				os.Exit(1)
 			}
 		case "-h", "--help":
-			usage()
-			os.Exit(0)
+			showHelp = true
 		default:
-			ostArgs = append(ostArgs, arg)
+			if len(ostArgs) == 0 && arg == "help" {
+				showHelp = true
+			} else if len(ostArgs) == 0 && arg == "version" {
+				showVersion = true
+			} else {
+				ostArgs = append(ostArgs, arg)
+			}
 		}
 	}
 
+	if showVersion {
+		fmt.Printf("ostd %s\n", VERSION)
+		ostArgs = []string{"--version"}
+	}
+
 	// Image and Tag logic
+	if strings.HasSuffix(tag, "-dev") {
+		tag = "latest"
+	}
 	if strings.Contains(image, ":") {
 		if tag != "latest" {
 			image = strings.SplitN(image, ":", 2)[0] + ":" + tag
@@ -207,20 +231,25 @@ func main() {
 
 	addMapping(&mappings, pwd, unixPwd)
 
-	// Handle Windows-style output paths for -o option
-	if runtime.GOOS == "windows" {
-		for i := 0; i < len(ostArgs); i++ {
-			if ostArgs[i] == "-o" && i+1 < len(ostArgs) {
-				outputPath := ostArgs[i+1]
-				// Check if it's a Windows-style path (contains drive letter or backslashes)
-				if filepath.VolumeName(outputPath) != "" || strings.Contains(outputPath, "\\") {
-					absPath, err := filepath.Abs(outputPath)
+	// Handle Windows-style and external paths for -o and -f options
+	for i := 0; i < len(ostArgs); i++ {
+		if (ostArgs[i] == "-o" || ostArgs[i] == "-f" || ostArgs[i] == "--file") && i+1 < len(ostArgs) {
+			filePath := ostArgs[i+1]
+			if runtime.GOOS == "windows" {
+				if filepath.VolumeName(filePath) != "" || strings.Contains(filePath, "\\") {
+					absPath, err := filepath.Abs(filePath)
 					if err == nil {
 						wslPath := toUnixPath(absPath)
 						addMapping(&mappings, absPath, wslPath)
 						ostArgs[i+1] = wslPath
-						slog.Debug(fmt.Sprintf("Windows output path detected: %s -> %s (mounted)", outputPath, wslPath))
+						slog.Debug(fmt.Sprintf("Path mapped for container: %s -> %s (mounted)", filePath, wslPath))
 					}
+				}
+			} else {
+				// On Unix, if file is outside pwd, ensure its parent directory or file is mounted
+				if filepath.IsAbs(filePath) && !strings.HasPrefix(filePath, pwd) {
+					addMapping(&mappings, filePath, filePath)
+					slog.Debug(fmt.Sprintf("External path mapped for container: %s", filePath))
 				}
 			}
 		}
@@ -262,6 +291,30 @@ func main() {
 		os.Exit(0)
 	}
 
+	if showHelp {
+		usage()
+		fmt.Println()
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println("ostd executes any ost command inside a Docker container.")
+		fmt.Println("The underlying ost engine operations are listed below:")
+		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Println()
+		if len(ostArgs) == 0 {
+			ostArgs = []string{"help"}
+		} else {
+			hasHelp := false
+			for _, a := range ostArgs {
+				if a == "help" || a == "-h" || a == "--help" {
+					hasHelp = true
+					break
+				}
+			}
+			if !hasHelp {
+				ostArgs = append(ostArgs, "help")
+			}
+		}
+	}
+
 	if len(ostArgs) > 0 && ostArgs[0] == "sh" {
 		entrypoint = "bash"
 		ostArgs = ostArgs[1:]
@@ -272,27 +325,25 @@ func main() {
 
 	// Ensure directory exists
 	os.MkdirAll(ostrichDockerDir, 0755)
-	folders := []string{"config", "helm", "sdk-config"}
+	folders := []string{"config", "helm", "sdk-config", "cache"}
 	for _, f := range folders {
 		os.MkdirAll(filepath.Join(ostrichDockerDir, f), 0755)
 	}
 
-	// TTY detection
+	// TTY & Stdin Pipe detection
 	var interactive []string
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		if term.IsTerminal(int(os.Stdout.Fd())) {
 			interactive = []string{"-it"}
-		} else {
+		}
+	} else if fi, err := os.Stdin.Stat(); err == nil {
+		if (fi.Mode()&os.ModeNamedPipe) != 0 || fi.Mode().IsRegular() {
 			interactive = []string{"-i"}
 		}
 	}
 
-	// Get sdk core directory (ost-core)
-	exePath, _ := os.Executable()
-	topDir := filepath.Dir(exePath)
-	ostCoreDir := filepath.Join(topDir, "..", "..", "ost-core")
-	unixTop := toUnixPath(ostCoreDir)
 	unixHome := toUnixPath(home)
+
 
 	dockerRunArgs := []string{"run", "--rm"}
 	dockerRunArgs = append(dockerRunArgs, interactive...)
@@ -306,25 +357,54 @@ func main() {
 	dockerRunArgs = append(dockerRunArgs, "-w", workdir)
 
 	mountVolume(&dockerRunArgs, &mappings, filepath.Join(home, ".kube", "config"), "/kubeconfig")
-	mountVolume(&dockerRunArgs, &mappings, ostrichDockerDir, "/sdk/.ostrich")
-	addMapping(&mappings, ostCoreDir, "/sdk")
+	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "config"), "/home/sdk/.config")
+	mountVolume(&dockerRunArgs, &mappings, filepath.Join(ostrichDockerDir, "cache"), "/home/sdk/.cache")
+	mountVolume(&dockerRunArgs, &mappings, ostrichDockerDir, "/home/sdk/.ostrich")
+	mountVolume(&dockerRunArgs, &mappings, os.TempDir(), os.TempDir())
+
 
 	dockerRunArgs = append(dockerRunArgs,
 		"-e", "KUBECONFIG=/kubeconfig",
-		"-e", "HOME=/sdk",
+		"-e", "HOME=/home/sdk",
+		"-e", "XDG_CONFIG_HOME=/home/sdk/.config",
+		"-e", "XDG_CACHE_HOME=/home/sdk/.cache",
 		"-e", "OST_WORKSPACE="+unixPwd,
-		"-e", "OST_SDK_HOST_PATH="+unixTop,
 		"-e", "OST_HOME_HOST_PATH="+unixHome,
 	)
+
+	// Forward host proxy environment variables if set
+	proxyEnvs := []string{
+		"HTTP_PROXY", "http_proxy",
+		"HTTPS_PROXY", "https_proxy",
+		"NO_PROXY", "no_proxy",
+		"ALL_PROXY", "all_proxy",
+	}
+	for _, envKey := range proxyEnvs {
+		if val := os.Getenv(envKey); val != "" {
+			dockerRunArgs = append(dockerRunArgs, "-e", fmt.Sprintf("%s=%s", envKey, val))
+			slog.Debug(fmt.Sprintf("Passing host proxy variable: %s=%s", envKey, val))
+		}
+	}
+
+
+
 
 	// Pass docker config if it exists
 	dockerConfig := filepath.Join(home, ".docker", "config.json")
 	if _, err := os.Stat(dockerConfig); err == nil {
-		mountVolume(&dockerRunArgs, &mappings, dockerConfig, "/sdk/.docker/config.json", "ro")
+		mountVolume(&dockerRunArgs, &mappings, dockerConfig, "/home/sdk/.docker/config.json", "ro")
 	}
 
-	// Mount SSL certificates for certificate verification
-	if _, err := os.Stat("/etc/ssl/certs"); err == nil {
+
+	// Bind mount /usr/local/share/ca-certificates if it exists on host
+	hasCaCerts := false
+	caCertDir := "/usr/local/share/ca-certificates"
+	if _, err := os.Stat(caCertDir); err == nil {
+		hasCaCerts = true
+		mountVolume(&dockerRunArgs, &mappings, caCertDir, caCertDir, "ro")
+		slog.Debug(fmt.Sprintf("Mounted %s into container", caCertDir))
+	} else if _, err := os.Stat("/etc/ssl/certs"); err == nil {
+		// Mount SSL certificates for certificate verification if custom ca-certificates folder does not exist
 		mountVolume(&dockerRunArgs, &mappings, "/etc/ssl/certs", "/etc/ssl/certs", "ro")
 	}
 
@@ -341,32 +421,69 @@ func main() {
 		dockerRunArgs = append(dockerRunArgs, "-v", fmt.Sprintf("%s:/ostrich-volumes.yaml", volumesFile))
 	}
 
-	// Linux specific UID/GID
-	if runtime.GOOS == "linux" {
-		uid := os.Getuid()
-		gid := os.Getgid()
-		dockerRunArgs = append(dockerRunArgs, "-u", fmt.Sprintf("%d:%d", uid, gid))
+	// Linux specific UID/GID and group settings
+	var uid, gid int
+	var groupAdd []string
+	isLinux := (runtime.GOOS == "linux")
+	if isLinux {
+		uid = os.Getuid()
+		gid = os.Getgid()
 
 		// Try to get docker group id
 		cmd := exec.Command("getent", "group", "docker")
 		out, err := cmd.Output()
 		if err == nil {
 			parts := strings.Split(strings.TrimSpace(string(out)), ":")
-			if len(parts) >= 3 {
-				dockerRunArgs = append(dockerRunArgs, "--group-add", parts[2])
+			if len(parts) >= 3 && parts[2] != "" {
+				groupAdd = append(groupAdd, parts[2])
 			}
 		}
 	}
 
-	dockerRunArgs = append(dockerRunArgs, "--network", "host")
-	dockerRunArgs = append(dockerRunArgs, "--entrypoint", entrypoint)
-	dockerRunArgs = append(dockerRunArgs, image)
-
+	targetCmd := []string{entrypoint}
 	if debug && entrypoint == "/sdk/ost" {
-		dockerRunArgs = append(dockerRunArgs, "-d")
+		targetCmd = append(targetCmd, "-d")
 	}
+	targetCmd = append(targetCmd, ostArgs...)
 
-	dockerRunArgs = append(dockerRunArgs, ostArgs...)
+	if hasCaCerts {
+		dockerRunArgs = append(dockerRunArgs, "--network", "host")
+		dockerRunArgs = append(dockerRunArgs, "--entrypoint", "bash")
+		dockerRunArgs = append(dockerRunArgs, image)
+
+		var quotedCmds []string
+		for _, arg := range targetCmd {
+			quotedCmds = append(quotedCmds, shellQuote(arg))
+		}
+		cmdString := strings.Join(quotedCmds, " ")
+
+		var script string
+		if isLinux && uid != 0 {
+			privCmd := fmt.Sprintf("setpriv --reuid=%d --regid=%d", uid, gid)
+			if len(groupAdd) > 0 {
+				groups := append([]string{fmt.Sprintf("%d", gid)}, groupAdd...)
+				privCmd += fmt.Sprintf(" --groups=%s", strings.Join(groups, ","))
+			}
+			script = fmt.Sprintf("update-ca-certificates >/dev/null 2>&1 && exec %s %s", privCmd, cmdString)
+		} else {
+			script = fmt.Sprintf("update-ca-certificates >/dev/null 2>&1 && exec %s", cmdString)
+		}
+
+		dockerRunArgs = append(dockerRunArgs, "-c", script)
+	} else {
+		if isLinux {
+			dockerRunArgs = append(dockerRunArgs, "-u", fmt.Sprintf("%d:%d", uid, gid))
+			for _, g := range groupAdd {
+				dockerRunArgs = append(dockerRunArgs, "--group-add", g)
+			}
+		}
+
+		dockerRunArgs = append(dockerRunArgs, "--network", "host")
+		dockerRunArgs = append(dockerRunArgs, "--entrypoint", entrypoint)
+		dockerRunArgs = append(dockerRunArgs, image)
+
+		dockerRunArgs = append(dockerRunArgs, targetCmd[1:]...)
+	}
 
 	slog.Debug(fmt.Sprintf("Docker command prepared: docker %s", strings.Join(dockerRunArgs, " ")))
 

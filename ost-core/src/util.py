@@ -49,7 +49,8 @@ class Params:
         self.skip = []
         self.executedTasks = []
         self.userOutput = False
-        self.pluginFile = "ostrich.yaml"
+        self.pluginFiles = []
+        self._pluginFile = "ostrich.yaml"
         self.kubeConfig = None
         self.operation = ""
         self.operationParams = []
@@ -61,29 +62,100 @@ class Params:
         self.deletePluginTmpDir = True
         self.nologo = False
         self.skipTlsVerify = False
+        self.setValues = []
         self.parsedPluginConfig = {}
 
+    @property
+    def pluginFile(self):
+        if self.pluginFiles:
+            return self.pluginFiles[-1]
+        return self._pluginFile
+
+    @pluginFile.setter
+    def pluginFile(self, value):
+        if isinstance(value, list):
+            self.pluginFiles = value
+        elif value:
+            self.pluginFiles = [value]
+            self._pluginFile = value
+        else:
+            self.pluginFiles = []
+            self._pluginFile = "ostrich.yaml"
+
+    def applySetOverrides(self, target_dict: dict):
+        if not self.setValues or not isinstance(target_dict, dict):
+            return
+        for item in self.setValues:
+            if not item or '=' not in item:
+                raise OstrichException(f"Invalid --set format '{item}'. Expected format is param=value or key.subkey=value")
+            key_path, raw_value = item.split('=', 1)
+            key_path = key_path.strip()
+            if not key_path:
+                raise OstrichException(f"Invalid --set format '{item}': key cannot be empty")
+            try:
+                # Try parsing raw_value as YAML (handles int, float, bool, null, dict, list, string)
+                parsed_val = yaml.safe_load(raw_value)
+            except Exception:
+                parsed_val = raw_value
+
+            keys = key_path.split('.')
+            d = target_dict
+            for k in keys[:-1]:
+                if k not in d or not isinstance(d[k], dict):
+                    d[k] = {}
+                d = d[k]
+            d[keys[-1]] = parsed_val
+
+    def _loadFileContent(self, file_path: str, env_data: dict) -> dict:
+        logging.debug("Loading %s", file_path)
+        content = None
+        # Try different encodings: utf-8-sig handles BOM, utf-16 for PowerShell 5.1 redirection
+        for encoding in ['utf-8-sig', 'utf-16']:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                    break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        
+        if content is None:
+            # Fallback to default encoding
+            with open(file_path, 'r') as f:
+                content = f.read()
+
+        jinja_env = Environment(
+            variable_start_string='[[',
+            variable_end_string=']]',
+        )
+        try:
+            content = jinja_env.from_string(content).render(env=env_data)
+        except Exception as e:
+            raise OstrichException(f"Error templating {file_path}: {e}")
+
+        content = envsubst(content)
+        logging.debug("Templated config for %s:\n%s", file_path, content)
+        loaded = yaml.safe_load(content)
+        if loaded is None:
+            return {}
+        if not isinstance(loaded, dict):
+            raise OstrichException(f"Configuration in {file_path} must be a dictionary/mapping, got {type(loaded).__name__}")
+        return loaded
 
     def loadPluginConf(self):
         try:
-            logging.debug("Loading %s",self.pluginFile)
-            
-            content = None
-            # Try different encodings: utf-8-sig handles BOM, utf-16 for PowerShell 5.1 redirection
-            for encoding in ['utf-8-sig', 'utf-16']:
-                try:
-                    with open(self.pluginFile, 'r', encoding=encoding) as f:
-                        content = f.read()
-                        break
-                except (UnicodeDecodeError, UnicodeError):
-                    continue
-            
-            if content is None:
-                # Fallback to default encoding
-                with open(self.pluginFile, 'r') as f:
-                    content = f.read()
+            # Determine files to load:
+            # 1. When -f is not set, load ostrich.yaml.
+            # 2. Else, load ostrich.yaml if it exists, then load the files specified by the -f options.
+            # 3. Last parameter wins.
+            files_to_load = []
+            if not self.pluginFiles:
+                files_to_load = ["ostrich.yaml"]
+            else:
+                if os.path.exists("ostrich.yaml"):
+                    files_to_load.append("ostrich.yaml")
+                for f in self.pluginFiles:
+                    files_to_load.append(f)
 
-            # Templating with Jinja
             env_data = os.environ.copy()
             env_yaml_path = os.path.join(getConfigRoot(), "env.yaml")
             if os.path.exists(env_yaml_path):
@@ -95,19 +167,16 @@ class Params:
                 except Exception as e:
                     logging.warning("Error loading env.yaml: %s", e)
 
-            jinja_env = Environment(
-                variable_start_string='[[',
-                variable_end_string=']]',
-            )
-            try:
-                content = jinja_env.from_string(content).render(env=env_data)
-            except Exception as e:
-                raise OstrichException(f"Error templating {self.pluginFile}: {e}")
+            merged_config = {}
+            for file_path in files_to_load:
+                file_conf = self._loadFileContent(file_path, env_data)
+                dict_merge(merged_config, file_conf)
 
-            content = envsubst(content)
-            logging.debug("Templated config:\n%s", content)
-            self.parsedPluginConfig = yaml.safe_load(content)
+            self.parsedPluginConfig = merged_config
             
+            # Apply any --set overrides
+            self.applySetOverrides(self.parsedPluginConfig)
+
             # Schema validation
             if self.parsedPluginConfig:
                 template_kind = self.getPluginConf("template.kind", None)
@@ -116,7 +185,7 @@ class Params:
                         template_path = getTemplatePath(str(template_kind))
                         schema_path = os.path.join(template_path, "_doc/schema.yaml")
                         if os.path.exists(schema_path):
-                            logging.debug("Validating %s against schema %s", self.pluginFile, schema_path)
+                            logging.debug("Validating configuration against schema %s", schema_path)
                             with open(schema_path, 'r') as sf:
                                 schema = yaml.safe_load(sf)
                             jsonschema.validate(instance=self.parsedPluginConfig, schema=schema)
@@ -126,15 +195,15 @@ class Params:
                     except jsonschema.exceptions.ValidationError as e:
                         path = ".".join([str(p) for p in e.path])
                         if path:
-                            raise OstrichException(f"Configuration validation failed for {self.pluginFile} at key \"{path}\":\n{e.message}")
+                            raise OstrichException(f"Configuration validation failed at key \"{path}\":\n{e.message}")
                         else:
-                            raise OstrichException(f"Configuration validation failed for {self.pluginFile}:\n{e.message}")
+                            raise OstrichException(f"Configuration validation failed:\n{e.message}")
 
             self.parsedPluginConfig['params']=self
         except yaml.YAMLError as e:
-            raise OstrichException(f"Error parsing YAML file {self.pluginFile} {str(e)}")
+            raise OstrichException(f"Error parsing YAML: {str(e)}")
         except BaseException as e:
-            raise OstrichException(f"Error loading file {self.pluginFile} {str(e)}")
+            raise OstrichException(f"Error loading configuration: {str(e)}")
 
     def getPluginConf(self, key: str, defval="_UNDEFINED_"):
         try:
@@ -144,7 +213,7 @@ class Params:
             return ret
         except BaseException:
             if defval=="_UNDEFINED_":
-                logging.fatal("Cannot get plugin param \"%s\" in file %s",key,self.pluginFile)
+                logging.fatal("Cannot get plugin param \"%s\" in config", key)
                 raise
             else:
                 return defval
@@ -162,6 +231,28 @@ class Params:
                     continue
                 else:
                     raise OstrichException("Missing value for -o/--output option")
+            elif args[i] in ['-f', '--file']:
+                if i + 1 < len(args):
+                    self.pluginFiles.append(args[i+1])
+                    i += 2
+                    continue
+                else:
+                    raise OstrichException(f"Missing value for {args[i]} option")
+            elif args[i].startswith('--file='):
+                self.pluginFiles.append(args[i][len('--file='):])
+                i += 1
+                continue
+            elif args[i] == '--set':
+                if i + 1 < len(args):
+                    self.setValues.append(args[i+1])
+                    i += 2
+                    continue
+                else:
+                    raise OstrichException("Missing value for --set option")
+            elif args[i].startswith('--set='):
+                self.setValues.append(args[i][len('--set='):])
+                i += 1
+                continue
             elif args[i] in ['-dr', '--dry-run']:
                 self.dryRun = True
                 if self.tmpdir is None:
@@ -204,15 +295,25 @@ def runcheck(cmd):
 
 def root():
     src_dir = os.path.dirname(os.path.abspath(__file__))
+
+    if os.path.basename(src_dir) != "src" and os.path.exists(os.path.join(src_dir, "src", "templates")):
+        return os.path.join(src_dir, "src")
     if os.path.exists(os.path.join(src_dir, "templates")):
         return src_dir
     pkg_dir = os.path.dirname(src_dir)
     if os.path.exists(os.path.join(pkg_dir, "templates")):
         return pkg_dir
+    if os.path.exists(os.path.join(pkg_dir, "src", "templates")):
+        return os.path.join(pkg_dir, "src")
     argv_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+    if os.path.exists(os.path.join(argv_dir, "src", "templates")):
+        return os.path.join(argv_dir, "src")
     if os.path.exists(os.path.join(argv_dir, "templates")):
         return argv_dir
     return src_dir
+
+
+
 
 
 def extraTemplateRoot():

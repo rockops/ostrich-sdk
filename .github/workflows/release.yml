@@ -43,11 +43,11 @@ jobs:
         run: |
           mkdir -p bin/linux bin/darwin bin/windows
           
-          # Build ostd-cli with version injection for DefaultTag
+          # Build ostd-cli with version injection for VERSION and DefaultTag
           cd ostd-cli
-          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/linux/ostd
-          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/darwin/ostd
-          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.DefaultTag=${{ env.VERSION }}" -o ../bin/windows/ostd.exe
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }} -X main.DefaultTag=${{ env.VERSION }}" -o ../bin/linux/ostd
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }} -X main.DefaultTag=${{ env.VERSION }}" -o ../bin/darwin/ostd
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.VERSION=${{ env.VERSION }} -X main.DefaultTag=${{ env.VERSION }}" -o ../bin/windows/ostd.exe
           cd ..
           
           # Build ostr-cli with version injection

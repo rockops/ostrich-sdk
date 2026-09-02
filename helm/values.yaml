@@ -7,7 +7,7 @@ keys:
 
 ostrich-sdk:
   id: ostrich-sdk
-  registry: ghcr.io/rockops/docker
+  registry: ghcr.io/rockops
   image: ostrich-sdk-ssh
   # Defaults to the helm version
   #imageTag: latest

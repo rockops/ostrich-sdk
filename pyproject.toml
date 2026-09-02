@@ -54,5 +54,5 @@ where = ["ost-core"]
 include = ["src*"]
 
 [tool.setuptools.package-data]
-src = ["config.yaml", "templates/**/*", "test-templates/**/*"]
+src = ["config.yaml", "VERSION", "templates/**/*", "test-templates/**/*"]
 

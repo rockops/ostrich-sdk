@@ -65,16 +65,22 @@ RUN apt-get install -y nano vim rsync git inetutils-ping telnet curl sudo bash-c
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy SDK source and install dependencies
-COPY sdk /sdk
-WORKDIR /sdk
+# Copy SDK source, install dependencies, and clean up source files
+COPY sdk /tmp/sdk-build
 
-# Python deps
-RUN mkdir -p /data /sdk/k8s && \
-    /python-sdk/bin/pip install .
+# Python deps & cleanup
+RUN /python-sdk/bin/pip install /tmp/sdk-build && \
+    rm -rf /tmp/sdk-build && \
+    mkdir -p /sdk /data /home/sdk/.config /home/sdk/.cache /home/sdk/.ostrich && \
+    echo '#!/bin/sh\nexec /python-sdk/bin/ost "$@"' > /sdk/ost && \
+    chmod +x /sdk/ost && \
+    chown -R 1000:1000 /home/sdk && \
+    chmod -R 777 /home/sdk /data /sdk
+
 
 EXPOSE 22
 
 WORKDIR /home/sdk
 
 ENTRYPOINT ["/sdk/ost"]
+

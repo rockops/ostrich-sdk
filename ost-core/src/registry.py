@@ -400,7 +400,18 @@ def registry(params: Params):
         logging.info(f"Registry {name} is now marked as trusted (skipping TLS verification)")
     else:
         registryUsage()
-        raise OstrichException(f"Unknown registry sub-command: {sub_op}")
+def get_known_template_names():
+    known = {"hello", "basic", "backend"}
+    for root_fn in [util.templateRoot, util.extraTemplateRoot, util.testTemplateRoot]:
+        try:
+            r = root_fn()
+            if os.path.exists(r):
+                for t in os.listdir(r):
+                    if t != "global" and os.path.isdir(os.path.join(r, t)):
+                        known.add(t)
+        except Exception:
+            pass
+    return sorted(list(known))
 
 def search(params: Params):
     config_file = os.path.expanduser("~") + "/.ostrich/config/config.yaml"
@@ -493,13 +504,10 @@ def search(params: Params):
                             break
                         elif resp.status_code in [401, 403]:
                             if not auth:
-                                logging.warning(f"GitHub registry '{reg['name']}' requires authentication to list packages.")
-                                logging.info(f"Please login using: ost registry login {reg['name']}")
+                                logging.debug(f"GitHub registry '{reg['name']}' requires authentication to list packages via GitHub API.")
                             else:
                                 logging.warning(f"Authentication failed for GitHub registry '{reg['name']}'. Your token might be expired or lack 'read:packages' scope.")
                                 logging.info(f"You can try logging in again: ost registry login {reg['name']}")
-                            # We stop searching for this registry if we hit an auth error on the owner
-                            discovery_done = True
                             break
                     except Exception as e:
                         logging.debug(f"GitHub API error for {gh_url}: {e}")
@@ -522,12 +530,10 @@ def search(params: Params):
                     discovery_done = True
             elif resp.status_code in [401, 403]:
                 if not auth:
-                    logging.warning(f"Registry '{reg['name']}' requires authentication to search.")
-                    logging.info(f"Please login using: ost registry login {reg['name']}")
+                    logging.debug(f"Harbor API for registry '{reg['name']}' requires authentication.")
                 else:
                     logging.warning(f"Authentication failed for registry '{reg['name']}'.")
                     logging.info(f"Please check your credentials or login again: ost registry login {reg['name']}")
-                discovery_done = True
 
         # 3. Try standard OCI _catalog
         if not discovery_done:
@@ -541,12 +547,43 @@ def search(params: Params):
                 discovery_done = True
             elif resp.status_code in [401, 403]:
                 if not auth:
-                    logging.warning(f"Registry '{reg['name']}' requires authentication to list catalog.")
-                    logging.info(f"Please login using: ost registry login {reg['name']}")
+                    logging.debug(f"Catalog for registry '{reg['name']}' requires authentication to list catalog.")
                 else:
                     logging.warning(f"Catalog access denied for registry '{reg['name']}'. It might be required to login or the feature might be disabled.")
                     logging.info(f"You can try logging in: ost registry login {reg['name']}")
-                discovery_done = True
+
+        # 4. Fallback: Direct OCI repository tag lookup for candidates
+        if not discovery_done and not repo_names:
+            candidates = []
+            known_templates = get_known_template_names()
+            
+            if path:
+                candidates.append(path)
+                if query:
+                    candidates.append(f"{path}/{query}")
+                else:
+                    for t in known_templates:
+                        candidates.append(f"{path}/{t}")
+            else:
+                if query:
+                    candidates.append(query)
+                else:
+                    for t in known_templates:
+                        candidates.append(t)
+            
+            for candidate in set(candidates):
+                tags_url = f"{parsed.scheme}://{netloc}/v2/{candidate}/tags/list"
+                try:
+                    tags_resp = oci_request(tags_url, auth, skip_verify)
+                    if tags_resp.status_code == 200:
+                        repo_names.append(candidate)
+                        discovery_done = True
+                except Exception as e:
+                    logging.debug(f"Direct OCI tag lookup error for {tags_url}: {e}")
+
+            if not discovery_done and not auth and ("ghcr.io" in hostname or "github.com" in hostname):
+                logging.warning(f"GitHub registry '{reg['name']}' requires authentication to list all packages.")
+                logging.info(f"Please login using: ost registry login {reg['name']}")
 
         # Process found repositories
         for repo_name in sorted(list(set(repo_names))):

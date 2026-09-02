@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ostrich-sdk"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Ostrich SDK Core CLI and Templating Engine"
 readme = "README.md"
 authors = [
@@ -46,9 +46,12 @@ dependencies = [
 [project.scripts]
 ost = "src.cli:main"
 
+[tool.setuptools.dynamic]
+version = {file = ["src/VERSION"]}
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
 
 [tool.setuptools.package-data]
-src = ["config.yaml", "templates/**/*", "test-templates/**/*"]
+src = ["config.yaml", "VERSION", "templates/**/*", "test-templates/**/*"]

@@ -25,7 +25,9 @@ operation : the operation to perform (not applicable to all plugin types)
 
 Parameters:
   -d                    : debug mode
-  -f <plugin_file>      : plugin file to load. Default is ostrich.yaml in current directory
+  -f <plugin_file>      : plugin file to load (can be specified multiple times). 
+                          Default is ostrich.yaml in current directory.
+                          If specified, ostrich.yaml (if present) is loaded first, then -f files merge over it.
   -c <kube_config>      : kubeconfig to access your k8s cluster. Default is $HOME/.kube/config
                           or KUBECONFIG variable
   -r <private_registry> : private Docker registry to use (if not specified, use the global config, 
@@ -34,11 +36,13 @@ Parameters:
   -dr | --dry-run       : dry run only (just generate the descriptors)
   --rm                  : delete output directory before proceeding
   --nodeps              : do not execute dependency tasks
+  --set <param=value>   : override a specific parameter in plugin config (can be used multiple times)
 
 To get started :
   - ost template list            : get the list of available plugin types:
   - ost template describe <name> : get a description of the template
   - ost template config <name>   : generate a sample config file for the template
+  - ost template values          : show resolved configuration values
 Then execute tasks in your plugin (depending on the template, see in the description of your template):
   - ost run deploy               : deploy your plugin in dev mode
   - ost run package              : package your plugin (if you)
@@ -85,7 +89,7 @@ def main():
 
     # Setup argparse parser (excluding standard help formatting)
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('-f', '--file')
+    parser.add_argument('-f', '--file', action='append', default=[])
     parser.add_argument('-c', '--kubeconfig')
     parser.add_argument('-d', '--debug', action='store_true')
     parser.add_argument('-r', '--registry')
@@ -94,6 +98,7 @@ def main():
     parser.add_argument('--rm', action='store_true')
     parser.add_argument('-nd', '--nodeps', action='store_true')
     parser.add_argument('-s', '--skip', action='append', default=[])
+    parser.add_argument('--set', action='append', default=[])
     parser.add_argument('--nologo', action='store_true')
     parser.add_argument('-k', '--keep', action='store_true')
     parser.add_argument('--skip-tls-verify', action='store_true')
@@ -116,7 +121,7 @@ def main():
         sys.exit(0)
 
     params = util.Params()
-    params.pluginFile = parsed.file if parsed.file else "ostrich.yaml"
+    params.pluginFiles = parsed.file if parsed.file else []
     params.kubeConfig = parsed.kubeconfig
     params.registry = parsed.registry
     params.tmpdir = parsed.output
@@ -128,6 +133,7 @@ def main():
     params.rmTmpDir = parsed.rm
     params.noDeps = parsed.nodeps
     params.skip = parsed.skip if parsed.skip else []
+    params.setValues = parsed.set if parsed.set else []
     params.deletePluginTmpDir = not parsed.keep
     params.nologo = parsed.nologo
     params.skipTlsVerify = parsed.skip_tls_verify
